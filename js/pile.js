@@ -25,7 +25,8 @@
   var riseFrom = null, riseT = 1; // offline catch-up: the pile visibly rises
   var topOverflow = 0;  // mass volume that physically can't fit below the rim
   var settleAcc = 0;    // background relax timer — piles always slump to repose
-  var obstCapH = null;  // per-column max sand height under structure roofs
+  var obstAdd = null;   // phantom solid height per column (structure bodies)
+  var obstMin = null;   // foundation floor — sand under a house can't drain away
   var obstacleBoxes = []; // structure AABBs for the physics (guys land on roofs)
 
   function colX(i) { return x0 + (i + 0.5) * colW; }
@@ -75,7 +76,8 @@
     }
     bottom.h = new Float64Array(cols);
     bottom.hist = []; bottom.volume = 0; bottom.count = 0;
-    obstCapH = new Float64Array(cols).fill(Infinity);
+    obstAdd = new Float64Array(cols);
+    obstMin = new Float64Array(cols);
     obstacleBoxes = [];
     if (!keepTop) {
       top.h = new Float64Array(cols);
@@ -115,7 +117,9 @@
 
   // ---------- heightfield helpers ----------
 
-  function bottomSurfY(i) { return floorY[i] - bottom.h[i]; }
+  function bottomSurfY(i) {
+    return floorY[i] - bottom.h[i] - (obstAdd ? obstAdd[i] : 0);
+  }
 
   function relaxBottom(iMin, iMax) {
     iMin = Math.max(0, iMin); iMax = Math.min(cols - 1, iMax);
@@ -132,21 +136,21 @@
         var rate = 0.25 + Math.random() * 0.35;
         if (diff > jit) {
           var t = (diff - maxStep) * rate;
-          if (bottom.h[i] < t) t = bottom.h[i];
-          bottom.h[i] -= t; bottom.h[i + 1] += t; moved = true;
+          var avail = bottom.h[i] - obstMin[i]; // foundations stay put
+          if (avail < t) t = Math.max(0, avail);
+          bottom.h[i] -= t; bottom.h[i + 1] += t; moved = moved || t > 0;
           if (t > colW * 0.5) grainAt(i + 1, bottomSurfY, 1);
         } else if (-diff > jit) {
           var t2 = (-diff - maxStep) * rate;
-          if (bottom.h[i + 1] < t2) t2 = bottom.h[i + 1];
-          bottom.h[i + 1] -= t2; bottom.h[i] += t2; moved = true;
+          var avail2 = bottom.h[i + 1] - obstMin[i + 1];
+          if (avail2 < t2) t2 = Math.max(0, avail2);
+          bottom.h[i + 1] -= t2; bottom.h[i] += t2; moved = moved || t2 > 0;
           if (t2 > colW * 0.5) grainAt(i, bottomSurfY, -1);
         }
       }
-      // clamp under the chamber ceiling AND under structure roofs — sand can't
-      // occupy a building's footprint; it piles against the walls instead
+      // clamp under the chamber ceiling
       for (var j = iMin; j <= iMax; j++) {
         var cap = floorY[j] - ceilY[j];
-        if (obstCapH && obstCapH[j] < cap) cap = obstCapH[j];
         if (bottom.h[j] > cap && !hole[j]) {
           var ex = bottom.h[j] - cap;
           bottom.h[j] = cap;
@@ -619,6 +623,13 @@
             if (rnd <= 0) { pick = c; break; }
           }
         }
+        // never paint sand inside a building
+        var inBox = false;
+        for (var ob = 0; ob < obstacleBoxes.length; ob++) {
+          var bb = obstacleBoxes[ob];
+          if (x >= bb.x0 && x <= bb.x1 && y >= bb.y0 && y <= bb.y1) { inBox = true; break; }
+        }
+        if (inBox) continue;
         Guys.stampGuy(pileCtx, {
           x: x + (rng() - 0.5) * colW * 0.9,
           y: y + (rng() - 0.5) * rAvg * 0.5,
@@ -657,20 +668,24 @@
   // Where the pile surface is, for society actors.
   function surfaceAt(x) { var i = colAt(x); return bottomSurfY(i); }
 
-  // Structures are solid: sand is capped below their roofs (excess shoves
-  // aside via the clamp above) and the physics gets boxes to collide with.
+  // Structures are PHANTOM SOLID: each displaces exactly its own body — sand
+  // stacks against the walls, pours over the roof, and can bury the house
+  // (that's the tragedy working as intended). Nothing above the roof is
+  // blocked, and the sand under a foundation never drains away.
   function setObstacles(boxes) {
-    if (!obstCapH) return;
-    obstCapH.fill(Infinity);
+    if (!obstAdd) return;
+    obstAdd.fill(0);
+    obstMin.fill(0);
     obstacleBoxes = boxes || [];
     for (var b = 0; b < obstacleBoxes.length; b++) {
       var box = obstacleBoxes[b];
       var i0 = colAt(box.x0), i1 = colAt(box.x1);
       for (var i = i0; i <= i1; i++) {
-        obstCapH[i] = Math.min(obstCapH[i], Math.max(0, floorY[i] - box.y0));
+        obstAdd[i] = Math.max(obstAdd[i], box.y1 - box.y0);
+        obstMin[i] = Math.max(obstMin[i],
+          Math.min(bottom.h[i], Math.max(0, floorY[i] - box.y1)));
       }
     }
-    relaxBottom(0, cols - 1); // shove out any sand now standing inside a wall
   }
 
   window.Pile = {
