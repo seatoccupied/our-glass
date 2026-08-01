@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Our Glass</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='0.9em'%20font-size='90'%3E%E2%8C%9B%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<aside id="panel">
+  <header id="panel-head">
+    <h1>OUR&nbsp;GLASS</h1>
+    <div id="era-line"><span id="era-num">Era 1</span> · <span id="era-name">The First Grains</span></div>
+  </header>
+
+  <section id="counters">
+    <div id="sand-row">
+      <span id="sand-amount">0</span>
+      <span class="unit">sand</span>
+    </div>
+    <div id="sand-rate">+0 /s</div>
+    <div id="fill-block">
+      <div id="fill-label"><span id="fill-pct">0%</span> full · <span id="pop-count">0</span> little guys</div>
+      <div id="fill-bar"><div id="fill-bar-inner"></div></div>
+    </div>
+  </section>
+
+  <div id="flip-slot"></div>
+
+  <section id="upgrades"></section>
+
+  <footer id="panel-foot">
+    <button id="btn-mute" title="Mute / unmute">🔊</button>
+    <button id="btn-export" title="Copy your save to share or back up">Export</button>
+    <button id="btn-import" title="Paste a save to restore it">Import</button>
+    <button id="btn-reset" title="Wipe everything and start over">Reset</button>
+  </footer>
+</aside>
+
+<div id="modal-root"></div>
+<div id="banner-root"></div>
+<div id="toast-root"></div>
+<div id="selftest-result" style="display:none"></div>
+
+<script src="js/config.js"></script>
+<script src="js/util.js"></script>
+<script src="js/sound.js"></script>
+<script src="js/glass.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/pile.js"></script>
+<script src="js/guys.js"></script>
+<script src="js/society.js"></script>
+<script src="js/economy.js"></script>
+<script src="js/flip.js"></script>
+<script src="js/save.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
