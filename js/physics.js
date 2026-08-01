@@ -24,6 +24,9 @@
       gold: !!opts.gold,
       face: opts.face != null ? opts.face : (Math.random() * 3) | 0,
       earned: !!opts.earned,      // true for drained re-entries (already paid)
+      // Atomized guys are drawn tiny but carry a full share of the mountain's
+      // sand — see the volume-credit invariant in js/pile.js. null for rain.
+      vol: opts.vol != null && opts.vol > 0 ? opts.vol : null,
       touch: 0,
       support: null,
       settled: false,             // scored and at rest — but still living sand
@@ -62,6 +65,7 @@
       b.vy = tvy * CONFIG.FRICTION - vn * ny * rest;
       // impacts squash + spin from tangential slide
       if (vn < -140) { b.squash = 1; if (window.Sound) Sound.plink(b.r, -vn, b.colorIdx); }
+      if (vn < -140 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 1.8); // ROADMAP #8: a landing sound now has a landing you can see
       b.spin += (tvx * ny - tvy * nx) * 0.02;
     }
     return true;
@@ -235,6 +239,7 @@
             if (vnb < 0) {
               b.vx -= vnb * nnx * 1.18; b.vy -= vnb * nny * 1.18;
               if (vnb < -150) { b.squash = 1; if (window.Sound) Sound.plink(b.r, -vnb, b.colorIdx); }
+              if (vnb < -150 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 1.8); // ROADMAP #8
             }
             if (nny < -0.55) { b.grounded = true; b.groundContact = true; } // on the roof
           } else { // center inside: eject out the top
@@ -255,6 +260,7 @@
         b.y = g.y - b.r;
         if (b.vy > 0) {
           if (b.vy > 150) { b.squash = 1; if (window.Sound) Sound.plink(b.r, b.vy, b.colorIdx); }
+          if (b.vy > 150 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 1.8); // ROADMAP #8
           b.vy = -b.vy * C.RESTITUTION * 0.6;
           if (Math.abs(b.vy) < 20) b.vy = 0;
         }
@@ -330,6 +336,13 @@
       if (b.wasAboveNeck && b.y > glass.neckBottomY + b.r) {
         b.wasAboveNeck = false;
         lastNeckPassT = gameT;
+        // PAY-AT-NECK: this is the instant a live guy first passes downward
+        // through the neck — the moment the spec calls the payment moment.
+        // wasAboveNeck only ever flips true->false once per spawn/flip (never
+        // re-armed while falling), and Econ.earnGuy is itself guarded by
+        // b.earned, so a jam-pop that shoves a guy back down through the neck
+        // a second time (or any other re-entry) can never double-pay.
+        Econ.earnGuy(b);
       }
 
       // neck jam comedy: stuck in/near the neck, slow, for a while -> POP.
@@ -375,7 +388,17 @@
         b.settled = true;
         b.sleeping = true; // sand at rest sleeps in place until disturbed
         b.vx = 0; b.vy = 0; b.spin = 0;
-        // bottom-chamber guys cash in here; mountain guys pay when they pour down
+        // golden landing celebration stays HERE (the landing moment) even
+        // though payment itself moved to the neck crossing above — a golden
+        // guy that lands on the bottom pile OR on top of a mountain still
+        // gets its sparkle right where it comes to rest.
+        if (b.gold && window.FX) FX.sparkleAt(b.x, b.y, b.r * 3);
+        // safety net only: every guy that reaches bottom-chamber rest should
+        // already be earned (it had to cross the neck to get here, which pays
+        // it). Econ.earnGuy is idempotent, so this never double-pays — it
+        // just guarantees nothing is lost if some future path ever lets a
+        // body settle in the bottom chamber without passing through the
+        // wasAboveNeck transition above.
         if (b.y >= glass.neckTopY) Econ.earnGuy(b);
         continue;
       }

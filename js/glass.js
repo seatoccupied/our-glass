@@ -5,10 +5,14 @@
   'use strict';
 
   // Build the interior half-width profile top→bottom as [{y, hw}].
+  // Each chamber meets its wood cap FLUSH at full width (flat floor/ceiling,
+  // square corners) — no taper pockets. The throat curve (bell sweep from the
+  // full-width bulb down to the neck) is the only place the wall leans in,
+  // and the whole profile is built once on the top half then mirrored, so the
+  // top chamber and bottom chamber are always exact reflections of each other.
   function buildProfile(H, bulbHW, neckHW, neckLen) {
     var pts = [];
     var top = -H / 2;
-    var rimHW = bulbHW * 0.62;
     function add(f, hw) { pts.push({ y: top + f * H, hw: hw }); }
     function easeRange(f0, f1, hw0, hw1, steps) {
       for (var i = 1; i <= steps; i++) {
@@ -17,13 +21,23 @@
         add(f0 + (f1 - f0) * t, hw0 + (hw1 - hw0) * e);
       }
     }
-    var nl = (neckLen / H) / 2;         // neck half-length as fraction
-    add(0, rimHW);
-    easeRange(0, 0.14, rimHW, bulbHW, 7);           // smooth shoulder to widest
-    easeRange(0.14, 0.5 - nl, bulbHW, neckHW, 9);   // taper to neck
-    add(0.5 + nl, neckHW);              // neck straight section
-    easeRange(0.5 + nl, 0.86, neckHW, bulbHW, 9);   // flare to bottom bulb
-    easeRange(0.86, 1.0, bulbHW, bulbHW * 0.34, 5); // rounded floor
+    var nl = (neckLen / H) / 2;              // neck half-length as fraction of H
+    var halfSpan = 0.5 - nl;                 // f-span from cap (f=0) to neck edge
+    // ✏️ TUNE: how much of each half-bulb (cap -> neck) stays a flat, full-width
+    // wall before the throat curve sweeps in. 0 = curve starts right at the cap
+    // (fully bell-shaped); closer to 1 = boxier glass with a short swoop.
+    var straightF = CONFIG.BULB_STRAIGHT_FRAC * halfSpan;
+
+    // top half: flat cap -> (optional straight wall) -> throat curve -> neck
+    add(0, bulbHW);                                     // top cap, flush full width
+    if (straightF > 0.0005) add(straightF, bulbHW);      // straight wall down to the curve
+    easeRange(straightF, halfSpan, bulbHW, neckHW, 9);   // throat curve sweeping to the neck
+    add(0.5 + nl, neckHW);                               // neck straight section
+
+    // bottom half: exact mirror of the top (cosine ease is antisymmetric:
+    // e(1-t) === 1-e(t), so this reflects the top curve point-for-point)
+    easeRange(0.5 + nl, 1 - straightF, neckHW, bulbHW, 9); // mirrored throat curve
+    add(1, bulbHW);                                        // bottom cap, flush full width
     return pts;
   }
 

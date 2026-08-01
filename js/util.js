@@ -27,7 +27,7 @@
   }
 
   // 12,345 -> "12.3k" etc. Whole numbers below 10k shown plain.
-  var SUFFIX = ['', 'k', 'M', 'B', 'T', 'Qa', 'Qi'];
+  var SUFFIX = ['', 'k', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
   function fmt(n) {
     if (!isFinite(n)) return '∞';
     n = Math.floor(n);

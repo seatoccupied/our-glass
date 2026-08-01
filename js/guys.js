@@ -5,6 +5,14 @@
   'use strict';
 
   var animT = 0; // shared animation clock
+  var TRAIL_LEN = 3; // fall-trail sample count (world x/y pairs)
+  // Bumped once per real update() step (see tick()). doomcam.js runs its own
+  // independent requestAnimationFrame loop and calls drawGuy() a second time
+  // per real frame for any falling body inside its inset window, with no
+  // physics step in between — gate the trail SAMPLE (not the draw) on this
+  // counter so a body only records one new point per real tick no matter how
+  // many times it gets drawn that frame.
+  var trailTick = 0;
 
   function hexFor(b) {
     if (b.gold) return GOLD_HEX;
@@ -34,13 +42,70 @@
 
   // ---------- drawing ----------
 
+  // a few fading world-space dots behind a falling body — no save/restore,
+  // cheap enough for the whole pour column every frame
+  function drawTrail(ctx, b, hex) {
+    var t = b._trail, n = t.length / 2; // stored points, most-recent last
+    if (n < 2) return;
+    ctx.fillStyle = hex;
+    for (var i = 0; i < n - 1; i++) { // skip the current position (drawn as the body)
+      var age = n - 1 - i; // 1 = just behind current, grows toward the tail
+      var a = 0.28 * (1 - age / n);
+      if (a < 0.03) continue;
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.arc(t[i * 2], t[i * 2 + 1], b.r * (0.4 + 0.25 * (i + 1) / n), 0, U.TAU);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // a small twinkling diamond — the cheap gold tell for guys too tiny for
+  // the full 8-point sparkle below (ROADMAP #7: the old sr>3 gate went dark
+  // at era 6's default zoom, exactly the era that introduces gold guys)
+  function drawMiniGold(ctx, cx, cy, ss) {
+    var tw = (Math.sin(animT * 6 + cx) + 1) / 2;
+    ctx.fillStyle = 'rgba(255,255,220,' + (0.5 + tw * 0.5) + ')';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - ss); ctx.lineTo(cx + ss, cy);
+    ctx.lineTo(cx, cy + ss); ctx.lineTo(cx - ss, cy);
+    ctx.closePath(); ctx.fill();
+  }
+
   // zoom: world->screen scale, for level-of-detail
   function drawGuy(ctx, b, zoom, falling) {
     var sr = b.r * zoom;
     var hex = hexFor(b);
-    if (sr < 2.2) { // tiny: a dot
+
+    // pour trail: keeps a tiny ring buffer of prior world x/y right on the
+    // body (falling only — grounded guys clear it so a later re-fall doesn't
+    // start with a stale jump-cut tail). Covers the atomization tiny guys too.
+    if (falling) {
+      if (!b._trail) b._trail = [];
+      if (b._trailTick !== trailTick) {           // once per real tick, however many times we're drawn
+        b._trailTick = trailTick;
+        b._trail.push(b.x, b.y);
+        if (b._trail.length > TRAIL_LEN * 2) b._trail.splice(0, b._trail.length - TRAIL_LEN * 2);
+      }
+      drawTrail(ctx, b, hex);
+    } else if (b._trail && b._trail.length) {
+      b._trail.length = 0;
+    }
+
+    if (sr < 2.2) { // tiny: a dot, but bold outline + a 2px eye pair survive the shrink
       ctx.fillStyle = hex;
       ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, U.TAU); ctx.fill();
+      if (sr > 1.1) {
+        ctx.strokeStyle = U.shade(hex, -0.55);
+        ctx.lineWidth = Math.max(0.6 / zoom, b.r * 0.2);
+        ctx.stroke();
+        var eyeR = Math.max(0.5 / zoom, b.r * 0.14);
+        var eyeOff = b.r * 0.32;
+        ctx.fillStyle = '#1c2233';
+        ctx.beginPath(); ctx.arc(b.x - eyeOff, b.y - b.r * 0.1, eyeR, 0, U.TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x + eyeOff, b.y - b.r * 0.1, eyeR, 0, U.TAU); ctx.fill();
+      }
+      if (b.gold) drawMiniGold(ctx, b.x, b.y, Math.max(1 / zoom, b.r * 0.35));
       return;
     }
     ctx.save();
@@ -83,7 +148,7 @@
     ctx.lineWidth = lw;
     ctx.beginPath(); ctx.arc(0, 0, b.r, 0, U.TAU);
     ctx.fill();
-    if (sr > 3.5) ctx.stroke();
+    if (sr > 1.5) ctx.stroke(); // lowered so the bold outline survives into the dot tier
 
     // cel shade: darker crescent lower-right
     if (sr > 5) {
@@ -99,17 +164,22 @@
     // face — every color is a personality (mid-air panic is universal, though)
     if (sr > 6.5) drawFace(ctx, b, falling);
 
-    // golden sparkle
-    if (b.gold && sr > 3) {
-      var tw = (Math.sin(animT * 6 + b.x) + 1) / 2;
-      ctx.fillStyle = 'rgba(255,255,220,' + (0.4 + tw * 0.6) + ')';
-      var spx = b.r * 0.5, spy = -b.r * 0.5, ss = b.r * 0.28 * (0.7 + tw * 0.5);
-      ctx.beginPath();
-      ctx.moveTo(spx, spy - ss); ctx.lineTo(spx + ss * 0.3, spy - ss * 0.3);
-      ctx.lineTo(spx + ss, spy); ctx.lineTo(spx + ss * 0.3, spy + ss * 0.3);
-      ctx.lineTo(spx, spy + ss); ctx.lineTo(spx - ss * 0.3, spy + ss * 0.3);
-      ctx.lineTo(spx - ss, spy); ctx.lineTo(spx - ss * 0.3, spy - ss * 0.3);
-      ctx.closePath(); ctx.fill();
+    // golden sparkle: full 8-point star once large enough to read it; below
+    // that, the small diamond so gold still reads at era-6 default zoom
+    if (b.gold) {
+      if (sr > 3) {
+        var tw = (Math.sin(animT * 6 + b.x) + 1) / 2;
+        ctx.fillStyle = 'rgba(255,255,220,' + (0.4 + tw * 0.6) + ')';
+        var spx = b.r * 0.5, spy = -b.r * 0.5, ss = b.r * 0.28 * (0.7 + tw * 0.5);
+        ctx.beginPath();
+        ctx.moveTo(spx, spy - ss); ctx.lineTo(spx + ss * 0.3, spy - ss * 0.3);
+        ctx.lineTo(spx + ss, spy); ctx.lineTo(spx + ss * 0.3, spy + ss * 0.3);
+        ctx.lineTo(spx, spy + ss); ctx.lineTo(spx - ss * 0.3, spy + ss * 0.3);
+        ctx.lineTo(spx - ss, spy); ctx.lineTo(spx - ss * 0.3, spy - ss * 0.3);
+        ctx.closePath(); ctx.fill();
+      } else {
+        drawMiniGold(ctx, b.r * 0.45, -b.r * 0.45, Math.max(1 / zoom, b.r * 0.35));
+      }
     }
     ctx.restore();
   }
@@ -182,6 +252,74 @@
     }
   }
 
+  // Simplified per-color face for the baked pile: eyes + mouth only (no
+  // limbs, no cel-shade crescent), shapes adapted from drawFace's non-falling
+  // branch. NO ctx.clip() anywhere in here — resynthesize() calls stampGuy
+  // on the order of 1e5 times per load/offline-catchup, and per-stamp clip()
+  // is one of Canvas2D's slowest calls; a clip would turn a load hitch into
+  // a multi-second freeze (ROADMAP #2).
+  function stampFace(pctx, b) {
+    var r = b.r, ink = '#1c2233';
+    var ey = -r * 0.18, ex = r * 0.32;
+    var kind = b.colorIdx % 10;
+    pctx.fillStyle = ink;
+    pctx.strokeStyle = ink;
+    pctx.lineWidth = r * 0.09;
+    pctx.lineCap = 'round';
+
+    // eyes
+    if (kind === 1) { // Amber: asleep on arrival
+      pctx.beginPath();
+      pctx.moveTo(-ex - r * 0.13, ey); pctx.lineTo(-ex + r * 0.13, ey);
+      pctx.moveTo(ex - r * 0.13, ey); pctx.lineTo(ex + r * 0.13, ey);
+      pctx.stroke();
+    } else if (kind === 3) { // Mint: serene closed arcs
+      pctx.beginPath(); pctx.arc(-ex, ey + r * 0.05, r * 0.13, Math.PI, 0); pctx.stroke();
+      pctx.beginPath(); pctx.arc(ex, ey + r * 0.05, r * 0.13, Math.PI, 0); pctx.stroke();
+    } else if (kind === 7) { // Teal: sunglasses, always
+      pctx.fillRect(-ex - r * 0.22, ey - r * 0.12, (ex + r * 0.22) * 2, r * 0.24);
+    } else if (kind === 9) { // Berry: scheming squint
+      pctx.beginPath(); pctx.arc(-ex, ey, r * 0.1, 0, U.TAU); pctx.fill();
+      pctx.beginPath();
+      pctx.moveTo(ex - r * 0.13, ey - r * 0.04); pctx.lineTo(ex + r * 0.13, ey + r * 0.04);
+      pctx.stroke();
+    } else {
+      var er = kind === 6 ? r * 0.15 : (kind === 2 ? r * 0.14 : r * 0.11); // Lemon/Sky big
+      pctx.beginPath(); pctx.arc(-ex, ey, er, 0, U.TAU); pctx.fill();
+      pctx.beginPath(); pctx.arc(ex, ey, er, 0, U.TAU); pctx.fill();
+      if (kind === 4) { // Lilac: one skeptical brow
+        pctx.beginPath();
+        pctx.moveTo(ex - r * 0.16, ey - r * 0.26); pctx.lineTo(ex + r * 0.16, ey - r * 0.34);
+        pctx.stroke();
+      }
+    }
+
+    // mouth
+    pctx.beginPath();
+    if (kind === 2) {                             // Sky: "o"
+      pctx.arc(0, r * 0.28, r * 0.16, 0, U.TAU);
+    } else if (kind === 8) {                      // Tangerine: worried
+      pctx.arc(0, r * 0.42, r * 0.22, 1.25 * Math.PI, 1.75 * Math.PI);
+    } else if (kind === 4) {                      // Lilac: unconvinced line
+      pctx.moveTo(-r * 0.2, r * 0.26); pctx.lineTo(r * 0.2, r * 0.26);
+    } else if (kind === 9) {                      // Berry: smirk
+      pctx.arc(r * 0.08, r * 0.2, r * 0.22, 0.15 * Math.PI, 0.6 * Math.PI);
+    } else if (kind === 6) {                      // Lemon: manic grin
+      pctx.arc(0, r * 0.14, r * 0.36, 0.15 * Math.PI, 0.85 * Math.PI);
+    } else if (kind === 1) {                      // Amber: tiny snore mouth
+      pctx.arc(0, r * 0.3, r * 0.08, 0, U.TAU);
+    } else {                                       // default happy arc
+      pctx.arc(0, r * 0.18, r * 0.3, 0.25 * Math.PI, 0.75 * Math.PI);
+    }
+    pctx.stroke();
+
+    if (kind === 5) { // Rose: blush
+      pctx.fillStyle = 'rgba(255,255,255,0.35)';
+      pctx.beginPath(); pctx.arc(-ex - r * 0.14, ey + r * 0.3, r * 0.09, 0, U.TAU); pctx.fill();
+      pctx.beginPath(); pctx.arc(ex + r * 0.14, ey + r * 0.3, r * 0.09, 0, U.TAU); pctx.fill();
+    }
+  }
+
   // static stamp for the baked pile canvas (tucked pose, always "full" detail —
   // the canvas keeps whatever resolution it has)
   function stampGuy(pctx, b) {
@@ -195,16 +333,7 @@
     pctx.lineWidth = Math.max(1, b.r * 0.16);
     pctx.beginPath(); pctx.arc(0, 0, b.r, 0, U.TAU);
     pctx.fill(); pctx.stroke();
-    // sleepy face
-    pctx.strokeStyle = '#1c2233';
-    pctx.lineWidth = b.r * 0.1;
-    pctx.beginPath();
-    pctx.moveTo(-b.r * 0.42, -b.r * 0.15); pctx.lineTo(-b.r * 0.2, -b.r * 0.15);
-    pctx.moveTo(b.r * 0.2, -b.r * 0.15); pctx.lineTo(b.r * 0.42, -b.r * 0.15);
-    pctx.stroke();
-    pctx.beginPath();
-    pctx.arc(0, b.r * 0.22, b.r * 0.24, 0.3 * Math.PI, 0.7 * Math.PI);
-    pctx.stroke();
+    stampFace(pctx, b);
     if (b.gold) {
       pctx.fillStyle = 'rgba(255,255,220,0.8)';
       pctx.beginPath(); pctx.arc(b.r * 0.4, -b.r * 0.4, b.r * 0.16, 0, U.TAU); pctx.fill();
@@ -220,7 +349,7 @@
     }
   }
 
-  function tick(dt) { animT += dt; }
+  function tick(dt) { animT += dt; trailTick++; }
 
   // ================= FX =================
 
@@ -292,10 +421,18 @@
     for (var i = 0; i < world.length; i++) {
       var p = world[i], a = p.life / p.max;
       if (p.kind === 'text') {
+        var fsize = Math.max(14 / zoom, CONFIG.R0 * 1.7);
         ctx.globalAlpha = a;
-        ctx.fillStyle = p.color;
-        ctx.font = '900 ' + Math.max(14 / zoom, CONFIG.R0 * 1.7) + 'px "Segoe UI", sans-serif';
+        ctx.font = '900 ' + fsize + 'px "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
+        // dark stroke first (ROADMAP #17c): the +N text was vanishing against
+        // the pile with no outline. Colors are untouched, only an outline is
+        // added underneath the same fill.
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(2, fsize * 0.14);
+        ctx.strokeStyle = 'rgba(18,12,6,0.8)';
+        ctx.strokeText(p.text, p.x, p.y);
+        ctx.fillStyle = p.color;
         ctx.fillText(p.text, p.x, p.y);
       } else if (p.kind === 'puff') {
         ctx.globalAlpha = a * (p.gold ? 0.85 : 0.4);

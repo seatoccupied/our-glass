@@ -21,17 +21,20 @@
       vol: { m: volumes.music, d: volumes.donk, p: volumes.ping },
       pile: Pile.serialize(),
       society: Society.serialize(),
-      // mid-air guys ride along — nothing is ever lost, not even on reload
+      // Mid-air guys ride along — nothing is ever lost, not even on reload.
+      // The 6th slot is the atomization volume credit (0 for ordinary rain):
+      // one number per live body, never per limb, so saves stay small.
       live: Phys.bodies.map(function (b) {
         return [Math.round(b.x), Math.round(b.y), Math.round(b.r * 10),
-                b.colorIdx, (b.gold ? 1 : 0) + (b.earned ? 2 : 0)];
+                b.colorIdx, (b.gold ? 1 : 0) + (b.earned ? 2 : 0),
+                b.vol ? Math.round(b.vol) : 0];
       })
     };
   }
 
   function save() {
     if (resetting) return;                 // the player asked for a clean slate
-    if (Flip.state === 'FLIPPING') return; // never snapshot mid-cinematic
+    if (Flip.midFlip()) return;            // never snapshot mid-cinematic
     if (window.__noSave) return;           // dev modes never touch real saves
     try {
       localStorage.setItem(KEY, JSON.stringify(collect()));
@@ -57,8 +60,8 @@
   }
   function sanitize(d) {
     d.era = Math.floor(num(d.era, 1, 199)) || 1;
-    d.sand = num(d.sand, 0, 1e15);
-    d.earned = num(d.earned, 0, 1e15);
+    d.sand = num(d.sand, 0, 1e30);
+    d.earned = num(d.earned, 0, 1e30);
     var lv = {};
     if (d.levels && typeof d.levels === 'object') {
       for (var i = 0; i < UPGRADES.length; i++) {
@@ -78,6 +81,8 @@
     p.bhist = numArr(p.bhist); p.thist = numArr(p.thist);
     p.ov = num(p.ov, 0, 1e15);
     p.up = Math.floor(num(p.up, 0, 1e12));
+    p.at = p.at ? 1 : 0;              // mid-atomization flag
+    p.ar = num(p.ar, 0, 1e9);         // …and its frozen guys/sec rate
     if (!Array.isArray(d.live)) d.live = [];
     return d;
   }
@@ -111,7 +116,8 @@
       for (var i = 0; i < d.live.length; i++) {
         var l = d.live[i];
         Phys.spawn({ x: l[0], y: l[1], r: Math.max(2, l[2] / 10),
-                     colorIdx: l[3] || 0, gold: !!(l[4] & 1), earned: !!(l[4] & 2) });
+                     colorIdx: l[3] || 0, gold: !!(l[4] & 1), earned: !!(l[4] & 2),
+                     vol: num(l[5], 0, 1e12) });   // 0 = ordinary rain guy
       }
     }
   }
@@ -120,14 +126,35 @@
   function processOffline(d, nowMs) {
     var away = ((nowMs || Date.now()) - (d.t || 0)) / 1000;
     if (!(away > 90)) return null;
-    var capped = Math.min(away, CONFIG.OFFLINE_CAP_HOURS * 3600);
-    var eff = CONFIG.OFFLINE_EFF;
+    // Night Watchmen (ROADMAP #14b): one Econ.lvl read raises both the cap
+    // and the efficiency together — same pattern as every other upgrade,
+    // just read directly here instead of through an economy.js getter,
+    // since these two CONFIG constants are save.js-only.
+    var wl = Econ.lvl('watch');
+    var capHours = CONFIG.OFFLINE_CAP_HOURS + wl * CONFIG.WATCH_HOURS_PER_LVL;
+    var eff = Math.min(1, CONFIG.OFFLINE_EFF + wl * CONFIG.WATCH_EFF_PER_LVL);
+    var capSeconds = capHours * 3600;
+    var wasCapped = away > capSeconds;         // offline honesty (ROADMAP #14a)
+    var capped = Math.min(away, capSeconds);
 
     // society income
     var societySand = Society.incomeRate() * capped * eff;
 
-    // the rain kept falling (until the chamber filled)
+    // The mountain kept coming down. Pure math — no bodies, same rate the live
+    // stream uses, same count/sand/colour bookkeeping (Pile.bulkConvert), so
+    // coming back mid-pour finds exactly the progress you'd have watched.
     var g = Main.glassRef();
+    var atomized = 0, atomSand = 0;
+    if (Pile.atomizing && Pile.top.count > 0) {
+      atomized = Math.min(Pile.top.count, Math.floor(Pile.atomRate * capped));
+      if (atomized > 0) {
+        var sand0 = Econ.sand;           // bulkConvert pays the unpaid share itself
+        Pile.bulkConvert(atomized);
+        atomSand = Econ.sand - sand0;
+      }
+    }
+
+    // the rain kept falling (until the chamber filled)
     var guyArea = Math.PI * Econ.guyR() * Econ.guyR();
     var room = Math.max(0, g.capacity - Pile.bottom.volume - Society.structureVolume());
     var guysWanted = Math.floor(Econ.dropCount() / Econ.dropInterval() * capped * eff);
@@ -159,14 +186,17 @@
     return {
       seconds: away,
       guys: guys,
-      sand: Math.floor(societySand + rainSand),
-      full: Pile.fillFraction() >= 0.999   // the plain truth, however we got here
+      atomized: atomized,
+      sand: Math.floor(societySand + rainSand + atomSand),
+      full: Pile.fillFraction() >= 0.999,  // the plain truth, however we got here
+      capped: wasCapped                    // ROADMAP #14a: away ran past the (Watchmen-boosted) cap
     };
   }
 
   // ---------- export / import ----------
 
   function exportString() {
+    if (Flip.midFlip()) return null;       // never snapshot mid-cinematic (same rule as save())
     return 'OG1.' + btoa(unescape(encodeURIComponent(JSON.stringify(collect()))));
   }
 

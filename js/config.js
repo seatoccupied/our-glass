@@ -13,7 +13,18 @@
     NECK_GROWTH: 1.34,   // neck half-width growth per era  ✏️ TUNE
     NECK_HW_MAX_FRAC: 0.22, // neck never wider than this fraction of bulb halfwidth
     NECK_LEN_FRAC: 0.045,   // neck straight section as a fraction of glass height
-    FILL_FRAC: 0.90,     // chamber counts as "full" at this fraction of its area  ✏️ TUNE
+    BULB_STRAIGHT_FRAC: 0.38, // ✏️ TUNE: fraction of each half-bulb (cap->neck) held
+                               // flat/full-width before the throat curve sweeps in —
+                               // higher = boxier glass, lower = more bell-shaped
+    FILL_FRAC: 0.85,     // chamber counts as "full" at this fraction of its area  ✏️ TUNE
+                         // (0.90 originally; 0.727 for the s3 flat-floor reshape,
+                         // whose flush full-width floor/ceiling hold ~24% more area
+                         // than the old tapered pockets. Back up to 0.85 for the
+                         // staged flip: the carried mountain now atomizes into the
+                         // bottom EARLY instead of being half-stranded upstairs at
+                         // the next flip, so each era needs a deeper chamber to run
+                         // as long as it used to. Sole pacing lever — the era table
+                         // is independent of ATOMIZE_FLOW. See test/economy-sim.js)
 
     // ---- physics ----
     GRAVITY: 900,        // world units / s^2
@@ -32,12 +43,28 @@
     VARIETY_BONUS: 0.05,       // +5% income per unlocked color beyond the first 3
     OFFLINE_CAP_HOURS: 3,
     OFFLINE_EFF: 0.6,          // offline income efficiency
+    WATCH_HOURS_PER_LVL: 1.5,  // ✏️ TUNE: extra offline-cap hours per Night Watchmen level
+    WATCH_EFF_PER_LVL: 0.04,   // ✏️ TUNE: extra offline efficiency per level (Econ.lvl('watch'), capped at 1 in save.js)
     DRAIN_BASE: 1.4,           // guys/sec through an era-1 neck while draining  ✏️ TUNE
+
+    // ---- the flip, in three staged beats (see js/flip.js) ----
+    FLIP_ROTATE_SECONDS: 1.2,  // ✏️ TUNE stage 0: the whole world turns over 180°
+    FLIP_CRUSH_SECONDS: 1.6,   // ✏️ TUNE stage 1: the inverted pile collapses
+    CRUSH_FALL_FRAC: 0.45,     // ✏️ TUNE share of the crush spent falling (rest = avalanche)
+    CRUSH_RELAX_PASSES: 5,     // ✏️ TUNE avalanche passes per frame once the mass lands
+
+    // ---- stage 2: atomization (the mountain becomes little guys again) ----
+    // The mountain pours at ATOMIZE_FLOW × the rain's CURRENT volume rate, so a
+    // faster/bigger rain also empties the top faster and the window stays a
+    // stable ~8-15% of the era at every scale. The neck upgrade multiplies it.
+    ATOMIZE_FLOW: 6,           // ✏️ TUNE how many times the rain rate the top pours at
+    ATOMIZE_R_FRAC: 0.45,      // ✏️ TUNE tiny-guy drawn radius vs. the sand volume it carries
+    ATOMIZE_SLOT_SHARE: 0.6,   // ✏️ TUNE share of free LIVE_CAP slots the stream may take
+                               // (the rest stays free so fresh rain still lands)
 
     // ---- spectacle ----
     SPAWN_HEIGHT: 90,          // how far above the rim guys appear
     MAX_FLOATERS: 14,          // concurrent "+N" texts
-    FLIP_ANIM_SECONDS: 4.2,
     FLIP_AUTO_SECONDS: 10,     // auto-flip if the button sits unpressed
     DOOM_FILL: 0.9             // the Doomsayer appears at this fill fraction
   };
@@ -109,6 +136,9 @@
     { id: 'neck',    icon: '⏳', name: 'Throat Polish',
       desc: 'A wider neck. Guys flow through faster after a flip.',
       base: 900,  mult: 2.6,  era: 3, max: 8, branch: 'glass' },
+    { id: 'watch',   icon: '🕯️', name: 'Night Watchmen',
+      desc: 'Someone keeps count while you are away. Longer offline cap, less wasted time.',
+      base: 1000, mult: 2.4,  era: 3, max: 6, branch: 'glass' },
     { id: 'gold',    icon: '✨', name: 'Golden Touch',
       desc: 'Better odds of a Golden Sandman (worth 25×).',
       base: 30000, mult: 2.8, era: 6, max: 8, branch: 'glass' },

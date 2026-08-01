@@ -13,6 +13,7 @@
   --mint: #4dd599;
   --sky: #4dabff;
   --card-r: 14px;
+  --fill-frac: 0; /* set live by js/ui.js refresh() — ROADMAP #6 tension ramp */
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -95,7 +96,20 @@ html, body {
   width: 0%;
   background: linear-gradient(90deg, #d99a3e, var(--sand));
   border-radius: 6px;
-  transition: width 0.3s ease;
+  transition: width 0.3s ease, background 0.4s ease, box-shadow 0.4s ease;
+  box-shadow: 0 0 calc(var(--fill-frac, 0) * 12px) rgba(255, 140, 70, calc(var(--fill-frac, 0) * 0.7));
+}
+/* tension ramp (ROADMAP #6): hotter gradient once the glass is genuinely close */
+#fill-bar-inner.fill-tense {
+  background: linear-gradient(90deg, #e0602c, #ff9f43, #ffd76e);
+}
+#fill-pct.pct-urgent {
+  display: inline-block;
+  animation: pct-pulse 0.7s ease-in-out infinite;
+}
+@keyframes pct-pulse {
+  0%, 100% { transform: scale(1);    color: var(--ink); }
+  50%      { transform: scale(1.18); color: var(--coral); }
 }
 
 /* ---------- FLIP button ---------- */
@@ -138,10 +152,11 @@ html, body {
   margin: 12px 2px 6px;
 }
 .upg-card {
+  position: relative;
   background: var(--panel2);
   border: 2px solid var(--line);
   border-radius: var(--card-r);
-  padding: 10px 12px;
+  padding: 10px 12px 15px;
   margin-bottom: 8px;
   display: flex;
   align-items: center;
@@ -172,7 +187,53 @@ html, body {
   border-color: var(--line);
   cursor: default;
 }
-.upg-card.maxed .upg-buy { visibility: hidden; }
+.upg-card.maxed .upg-buy { display: none; }
+
+/* MAXED pill (ROADMAP #4c): replaces the old hidden-button blank gap */
+.upg-maxed-pill {
+  display: none;
+  flex: none;
+  min-width: 86px;
+  text-align: center;
+  padding: 9px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--ink-dim);
+  background: #1a2140;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+}
+.upg-card.maxed .upg-maxed-pill { display: block; }
+
+/* progress fill (ROADMAP #4b): thin bar hugging the card's bottom edge,
+   shown only while the card is genuinely unaffordable */
+.upg-fill {
+  display: none;
+  position: absolute;
+  left: 12px; right: 12px; bottom: 5px;
+  height: 3px;
+  background: #0a0f22;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.upg-card.unaffordable .upg-fill { display: block; }
+.upg-fill-inner {
+  height: 100%;
+  width: 0%;
+  background: var(--sand);
+  border-radius: 2px;
+  transition: width 0.25s ease;
+}
+
+/* buy feedback (ROADMAP #4d): scale-pulse + gold flash, one-shot on purchase */
+@keyframes card-pulse {
+  0%   { transform: scale(1);     border-color: var(--line); box-shadow: none; }
+  35%  { transform: scale(1.035); border-color: #ffd700; box-shadow: 0 0 20px rgba(255,215,0,0.55); }
+  100% { transform: scale(1);     border-color: var(--line); box-shadow: none; }
+}
+.upg-card.upg-bought { animation: card-pulse 0.45s ease; }
 
 /* ---------- sound sliders ---------- */
 #sound-rows {
@@ -330,6 +391,50 @@ html, body {
   border-color: var(--line);
 }
 .modal button:hover { filter: brightness(1.1); }
+
+/* ---------- dev tools (?dev=1 only) ---------- */
+#dev-menu {
+  margin-top: 10px;
+  background: var(--panel2);
+  border: 2px solid var(--line);
+  border-radius: var(--card-r);
+  padding: 8px 10px;
+  flex: none;
+}
+#dev-toggle {
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  user-select: none;
+}
+#dev-toggle:hover { color: var(--ink); }
+#dev-body { margin-top: 8px; }
+.dev-group { margin-bottom: 8px; }
+.dev-group:last-child { margin-bottom: 0; }
+.dev-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--ink-dim);
+  margin-bottom: 4px;
+}
+.dev-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.dev-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-dim);
+  background: #0a0f22;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.dev-btn:hover { color: var(--ink); border-color: #3d4a80; }
+.dev-btn-sm { min-width: 24px; padding: 5px 6px; text-align: center; }
+.dev-btn-wide { width: 100%; padding: 8px; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1250px) {

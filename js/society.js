@@ -3,13 +3,42 @@
 (function () {
   'use strict';
 
-  var structures = [];   // {t:'hut'|'tower', x, progress, done}
+  var structures = [];   // {t:'hut'|'tower', x, progress, done, popT}
   var workers = [];      // cosmetic actors on the pile surface
   var pyramid = null;    // {x, n, t, phase:'rising'|'standing'|'none'}
   var buildCooldown = 6;
   var pyramidCooldown = 30;
-  var doomsayer = null;  // {x} — appears when the end is near
+  var doomsayer = null;  // {x, mode:'predict'|'cameo', t, sign, camX, camY} — see spawnDoomsayer()
   var vindicated = 0;    // how many times he's been proven right (gag throttle)
+  var doomed = [];       // structures hanging off the inverted pile mid-crush
+  var animClock = 0;     // shared animation clock — advanced in tick() (dt-based) so
+                          // render() can be called more than once per frame (js/doomcam.js
+                          // does exactly that) without speeding animation up
+
+  var POP_SECONDS = 0.35; // ✏️ TUNE: how long a structure's completion overshoot lasts
+
+  // ✏️ TUNE: how often the Doomsayer makes an unscheduled CAMEO appearance,
+  // independent of fill — on top of (never instead of) the dramatic near-full
+  // PREDICTION trigger below, which still owns the vindicated payoff.
+  var DOOM_CAMEO_EVERY = 40;
+  var DOOM_CAMEO_SECONDS = 12; // how long a cameo stays on stage
+  var doomCameoT = DOOM_CAMEO_EVERY * (0.4 + Math.random() * 0.5);
+
+  // Rotating sign texts, dry deadpan "the end is near" energy. Each entry is
+  // the sign's two lines. vindicated<=3 payoff cap is untouched — this only
+  // changes what the sign SAYS, never how the prophecy gag is scored.
+  var DOOM_SAYINGS = [
+    ['THE END', 'IS NEAR'],
+    ['WE ARE', 'ALL SAND'],
+    ['GRAVITY', 'WINS'],
+    ['NOBODY', 'LISTENS'],
+    ['GLASS', 'WATCHES'],
+    ['REPENT', "OR DON'T"],
+    ['WE WERE', 'WARNED'],
+    ['DOWN IS', 'DESTINY'],
+    ['THE FLIP', 'AWAITS'],
+    ['THIS TOO', 'WILL END']
+  ];
 
   function era() { return Econ.era; }
   function unlocked() { return era() >= 2; }
@@ -29,6 +58,26 @@
     var w = Math.sqrt(v * (s.t === 'tower' ? 0.45 : 1.4));
     return { w: w, h: v / w };
   }
+
+  // The cast (workers, pyramid guys, bards, the Doomsayer + his sign) is a
+  // constant CONFIG.R0 while the glass grows G^(era-1) per era, so by era 5-6
+  // it's sub-pixel at default zoom (ROADMAP #7). Fix: scale it off the
+  // glass's capacity growth, the same relative-to-capacity approach sizeOf()
+  // already uses for structures — capacity grows with the SQUARE of the
+  // glass's linear scale, so sqrt(capacity ratio) is exactly that linear
+  // scale, and a cast radius of CONFIG.R0 * that scale renders at a constant
+  // SCREEN size in every era (it cancels fitZoomFor()'s 1/scale shrink
+  // exactly). Trade-off, taken deliberately per the roadmap: the cast ends
+  // up proportionally larger than the true (constant-R0) sandmen as eras
+  // climb — flagged for Zach's eye, not hidden.
+  var CAST_CAP0 = null; // era-1 capacity, cached once
+  function castScale() {
+    var g = Pile.glassRef;
+    if (!g) return 1;
+    if (CAST_CAP0 == null) CAST_CAP0 = Glass.build(1, 1).capacity;
+    return Math.sqrt(g.capacity / CAST_CAP0);
+  }
+  function castR() { return CONFIG.R0 * castScale(); }
 
   // structures are SOLID: sand piles against them, guys land on roofs
   function pushObstacles() {
@@ -66,10 +115,33 @@
     return Econ.rainRate() * share;
   }
 
+  // Era-scaled material palette: tan huts / brown towers through era 3, cool
+  // stone tones from era 4, gold trim from era 6 — "the society considers
+  // them royalty" (config.js's own era-6 card). Fills only; geometry and ink
+  // outlines are untouched (see the shared sizeOf contract, ROADMAP keeps).
+  function eraPalette() {
+    var e = era();
+    if (e >= 6) return { wall: '#c7b98a', wall2: '#a8987a', roof: '#7a6142',
+                          flag: '#ffd700', trim: '#ffd700' };
+    if (e >= 4) return { wall: '#9aa3ab', wall2: '#868f99', roof: '#6b5a4a',
+                          flag: '#ff6b6b', trim: null };
+    return { wall: '#d9a066', wall2: '#b78e6a', roof: '#a3543e',
+             flag: '#ff6b6b', trim: null };
+  }
+
+  function spawnDoomsayer(g, mode) {
+    // camX/camY start null (not yet drawn) — js/doomcam.js falls back to his
+    // base position for the one frame before render() below fills them in
+    return { x: (Math.random() < 0.5 ? -1 : 1) * g.bulbHW * 0.55, mode: mode, t: 0,
+             sign: DOOM_SAYINGS[(Math.random() * DOOM_SAYINGS.length) | 0],
+             camX: null, camY: null };
+  }
+
   function tick(dt) {
     if (!unlocked()) return;
     var g = Pile.glassRef;
     if (!g) return;
+    animClock += dt;
 
     // commission new structures — anchored to the surface where they're built
     buildCooldown -= dt;
@@ -80,22 +152,26 @@
         t: wantTower ? 'tower' : 'hut',
         x: sx,
         baseY: Pile.surfaceAt(sx),
-        progress: 0, done: false,
+        progress: 0, done: false, popT: null,
         seed: Math.random() * 1000
       });
       buildCooldown = 10 + Math.random() * 10;
       pushObstacles();
     }
-    // build progress
+    // build progress + the completion pop (motion beat on top of the
+    // existing door/window/crenellation state change — ROADMAP #8)
     for (var i = 0; i < structures.length; i++) {
       var s = structures[i];
       if (!s.done) {
         s.progress += buildSpeed() * dt;
         if (s.progress >= 1) {
-          s.progress = 1; s.done = true;
+          s.progress = 1; s.done = true; s.popT = 0;
           if (window.Sound) Sound.tada();
+          if (window.FX) FX.puff(s.x, s.baseY, sizeOf(s).w * 0.6);
           pushObstacles();
         }
+      } else if (s.popT != null && s.popT < POP_SECONDS) {
+        s.popT += dt;
       }
     }
 
@@ -124,40 +200,86 @@
       }
     }
 
-    // workers wander
+    // workers: wander, or — while a structure is under construction — walk
+    // to the site, help briefly, and wander off again (ROADMAP #21a). A
+    // small state machine on top of the original wander loop, not a rewrite.
     var target = workerTarget();
     while (workers.length < target) {
       workers.push({ x: (Math.random() - 0.5) * g.bulbHW, dir: Math.random() < 0.5 ? -1 : 1,
-                     phase: Math.random() * 10, carry: Math.random() < 0.5 });
+                     phase: Math.random() * 10, state: 'wander', buildT: 0, targetX: 0 });
     }
     if (workers.length > target) workers.length = target;
+    var busySites = null; // computed lazily, at most once per tick
     for (var w = 0; w < workers.length; w++) {
       var wk = workers[w];
-      wk.phase += dt * 6;
-      wk.x += wk.dir * dt * CONFIG.R0 * 2.2;
-      var lim = g.bulbHW * 0.85;
-      if (wk.x > lim) wk.dir = -1;
-      if (wk.x < -lim) wk.dir = 1;
-      if (Math.random() < dt * 0.15) wk.dir *= -1;
+      if (wk.state === 'toSite') {
+        wk.phase += dt * 6;
+        var dxw = wk.targetX - wk.x;
+        wk.dir = dxw > 0 ? 1 : -1;
+        var step = wk.dir * dt * CONFIG.R0 * 2.6; // a brisker pace, off to work
+        if (Math.abs(dxw) <= Math.abs(step)) {
+          wk.x = wk.targetX; wk.state = 'building'; wk.buildT = 1.1 + Math.random() * 0.9;
+        } else wk.x += step;
+      } else if (wk.state === 'building') {
+        wk.phase += dt * 11; // a busier fidget while he's actually working
+        wk.buildT -= dt;
+        if (wk.buildT <= 0) { wk.state = 'wander'; wk.dir = Math.random() < 0.5 ? -1 : 1; }
+      } else { // wander (default)
+        wk.phase += dt * 6;
+        wk.x += wk.dir * dt * CONFIG.R0 * 2.2;
+        var lim = g.bulbHW * 0.85;
+        if (wk.x > lim) wk.dir = -1;
+        if (wk.x < -lim) wk.dir = 1;
+        if (Math.random() < dt * 0.15) wk.dir *= -1;
+        // a chance to head to an active build site
+        if (busySites == null) busySites = structures.filter(function (st) { return !st.done; });
+        if (busySites.length && Math.random() < dt * 0.1) {
+          var site = busySites[(Math.random() * busySites.length) | 0];
+          wk.state = 'toSite'; wk.targetX = site.x;
+        }
+      }
     }
 
-    // the Doomsayer
-    if (Pile.fillFraction() >= CONFIG.DOOM_FILL && !doomsayer && Pile.bottom.count > 20) {
-      doomsayer = { x: (Math.random() < 0.5 ? -1 : 1) * g.bulbHW * 0.55 };
-      if (vindicated < 3) UI.toast('A prophet appears',
-        'One little guy has made a sign. It says the end is near. The others are not listening.');
+    // the Doomsayer: the dramatic near-full PREDICTION (unchanged — vindicated
+    // only ever tracks THIS trigger) plus more frequent unscheduled CAMEOS
+    // (✏️ TUNE DOOM_CAMEO_EVERY) so he's a familiar face long before the
+    // flip is close, not just a one-note klaxon-adjacent warning.
+    if (!doomsayer) {
+      if (Pile.fillFraction() >= CONFIG.DOOM_FILL && Pile.bottom.count > 20) {
+        doomsayer = spawnDoomsayer(g, 'predict');
+        if (vindicated < 3) UI.toast('A prophet appears',
+          'One little guy has made a sign. It says the end is near. The others are not listening.');
+      } else {
+        doomCameoT -= dt;
+        if (doomCameoT <= 0 && Pile.bottom.count > 20) {
+          doomsayer = spawnDoomsayer(g, 'cameo');
+          doomCameoT = DOOM_CAMEO_EVERY * (0.7 + Math.random() * 0.6);
+        }
+      }
+    } else {
+      doomsayer.t += dt;
+      if (doomsayer.mode === 'predict') {
+        if (Pile.fillFraction() < CONFIG.DOOM_FILL * 0.9) doomsayer = null;
+      } else if (doomsayer.t > DOOM_CAMEO_SECONDS) doomsayer = null;
     }
-    if (doomsayer && Pile.fillFraction() < CONFIG.DOOM_FILL * 0.9) doomsayer = null;
   }
 
-  function flipDestroy() {
-    var g = Pile.glassRef;
+  // THE FLIP, stage 1. The works aren't wiped at the instant of the flip any
+  // more — they hang upside down off the underside of their own pile while it
+  // falls, and each one is crushed out of existence as the collapse reaches it.
+  // The mass visibly does the killing. (The guys are FINE — they ARE the sand.)
+  // mapX turns an old-frame x into a new-frame one (the 180° mirror + the
+  // era's growth); dur is the crush window the deaths are staggered across.
+  function flipDoom(mapX, dur) {
+    doomed = [];
     for (var i = 0; i < structures.length; i++) {
       var s = structures[i];
-      var y = Pile.surfaceAt(s.x);
-      FX.debris(s.x, y - CONFIG.R0 * 2, s.t === 'tower' ? '#b78aff' : '#d9a066', 12, 420);
+      doomed.push({ t: s.t, x: mapX(s.x), progress: s.progress, done: s.done,
+                    seed: s.seed, dieIn: dur * (0.15 + 0.7 * Math.random()) });
     }
-    if (doomsayer && vindicated < 3) {
+    // only a genuine PREDICTION (near-full fill, not an unrelated cameo) ever
+    // pays out the "he was right" gag — cameos are flavor, not prophecy.
+    if (doomsayer && doomsayer.mode === 'predict' && vindicated < 3) {
       vindicated++;
       setTimeout(function () {
         UI.toast('The prophet was right',
@@ -170,7 +292,21 @@
     doomsayer = null;
     buildCooldown = 14; // they need a moment to grieve (and land)
     pyramidCooldown = 40;
+    doomCameoT = DOOM_CAMEO_EVERY * (0.5 + Math.random() * 0.6);
     Pile.setObstacles([]);
+  }
+
+  function crushTick(dt) {
+    for (var i = doomed.length - 1; i >= 0; i--) {
+      var d = doomed[i];
+      d.dieIn -= dt;
+      if (d.dieIn > 0) continue;
+      var y = Pile.topBaseAt(d.x);
+      FX.debris(d.x, y, d.t === 'tower' ? '#b78aff' : '#d9a066', 12, 420);
+      FX.puff(d.x, y, CONFIG.R0 * 3.5);
+      if (window.Sound) Sound.pop();
+      doomed.splice(i, 1);
+    }
   }
 
   // ---------- rendering ----------
@@ -205,7 +341,16 @@
     var w = dim.w, h = dim.h;
     var y = s.baseY != null ? s.baseY : Pile.surfaceAt(s.x);
     var p = s.done ? 1 : s.progress;
-    var hNow = h * (0.15 + 0.85 * p);
+    // a fast height-overshoot pop the instant the build finishes, decaying
+    // back to normal over POP_SECONDS — the motion beat the sound/state
+    // change (door, crenellations, flag) never had (ROADMAP #8)
+    var pop = 0;
+    if (s.done && s.popT != null && s.popT < POP_SECONDS) {
+      var k = s.popT / POP_SECONDS;
+      pop = Math.sin(Math.min(1, k) * Math.PI) * 0.22;
+    }
+    var hNow = h * (0.15 + 0.85 * p) * (1 + pop);
+    var pal = eraPalette();
     ctx.save();
     ctx.translate(s.x, y);
     var wob = s.done ? 0 : Math.sin(s.seed + animClock * 7) * 0.02;
@@ -213,16 +358,20 @@
     ctx.lineWidth = Math.max(2, w * 0.06);
     ctx.strokeStyle = '#241507';
     if (s.t === 'hut') {
-      ctx.fillStyle = '#d9a066';
+      ctx.fillStyle = pal.wall;
       ctx.fillRect(-w / 2, -hNow, w, hNow);
       ctx.strokeRect(-w / 2, -hNow, w, hNow);
       if (p > 0.6) { // roof
-        ctx.fillStyle = '#a3543e';
+        ctx.fillStyle = pal.roof;
         ctx.beginPath();
         ctx.moveTo(-w * 0.62, -hNow);
         ctx.lineTo(0, -hNow - h * 0.45);
         ctx.lineTo(w * 0.62, -hNow);
         ctx.closePath(); ctx.fill(); ctx.stroke();
+        if (p >= 1 && pal.trim) { // gold ridge cap, era 6+
+          ctx.fillStyle = pal.trim;
+          ctx.fillRect(-w * 0.1, -hNow - h * 0.46, w * 0.2, h * 0.055);
+        }
       }
       if (p >= 1) { // door + warm window
         ctx.fillStyle = '#5b3a26';
@@ -232,7 +381,7 @@
         ctx.strokeRect(w * 0.18, -h * 0.66, w * 0.2, h * 0.2);
       }
     } else { // tower
-      ctx.fillStyle = '#b78e6a';
+      ctx.fillStyle = pal.wall2;
       ctx.fillRect(-w / 2, -hNow, w, hNow);
       ctx.strokeRect(-w / 2, -hNow, w, hNow);
       // brick lines
@@ -243,17 +392,21 @@
         ctx.moveTo(-w / 2, -hNow * yy / 5); ctx.lineTo(w / 2, -hNow * yy / 5);
         ctx.stroke();
       }
+      if (pal.trim) { // gold banding under the parapet, era 6+
+        ctx.fillStyle = pal.trim;
+        ctx.fillRect(-w / 2, -hNow, w, Math.max(1.5, h * 0.025));
+      }
       ctx.strokeStyle = '#241507';
       ctx.lineWidth = Math.max(2, w * 0.06);
       if (p >= 1) { // crenellations + flag
-        ctx.fillStyle = '#b78e6a';
+        ctx.fillStyle = pal.wall2;
         for (var c = -1; c <= 1; c++) {
           ctx.fillRect(c * w * 0.33 - w * 0.11, -hNow - h * 0.12, w * 0.22, h * 0.12);
           ctx.strokeRect(c * w * 0.33 - w * 0.11, -hNow - h * 0.12, w * 0.22, h * 0.12);
         }
         ctx.strokeStyle = '#241507';
         ctx.beginPath(); ctx.moveTo(0, -hNow - h * 0.12); ctx.lineTo(0, -hNow - h * 0.42); ctx.stroke();
-        ctx.fillStyle = '#ff6b6b';
+        ctx.fillStyle = pal.flag;
         ctx.beginPath();
         ctx.moveTo(0, -hNow - h * 0.42);
         ctx.lineTo(w * 0.34, -hNow - h * 0.34);
@@ -274,19 +427,32 @@
     ctx.restore();
   }
 
-  var animClock = 0;
+  // the doomed works, hanging upside down from the underside of the falling
+  // mass — drawn before the unlocked() gate so they still show mid-crush
+  function renderDoomed(ctx) {
+    for (var i = 0; i < doomed.length; i++) {
+      var d = doomed[i];
+      ctx.save();
+      ctx.translate(d.x, Pile.topBaseAt(d.x));
+      ctx.rotate(Math.PI);
+      drawStructure(ctx, { t: d.t, x: 0, baseY: 0, progress: d.progress,
+                           done: d.done, seed: d.seed });
+      ctx.restore();
+    }
+  }
 
   function render(ctx, zoom) {
+    if (doomed.length) renderDoomed(ctx);
     if (!unlocked()) return;
-    animClock += 1 / 60;
     var g = Pile.glassRef;
     var i;
+    var cr = castR(); // the cast's world-unit radius this frame (constant screen size)
     for (i = 0; i < structures.length; i++) drawStructure(ctx, structures[i]);
 
     // pyramid of guys
     if (pyramid) {
       var base = Pile.surfaceAt(pyramid.x);
-      var r = CONFIG.R0;
+      var r = cr;
       var rows = pyramid.phase === 'rising'
         ? Math.max(1, Math.ceil(pyramid.n * Math.min(1, pyramid.t / 6)))
         : pyramid.n;
@@ -302,14 +468,15 @@
       }
     }
 
-    // workers (skip when too small to read)
-    if (CONFIG.R0 * zoom > 1.6) {
+    // workers (skip only when the inset/zoom is too small to read at all —
+    // castR() keeps this true at default zoom in every era, ROADMAP #7)
+    if (cr * zoom > 1.6) {
       for (i = 0; i < workers.length; i++) {
         var w = workers[i];
-        var busy = structures.some(function (s) { return !s.done; });
-        drawMiniGuy(ctx, w.x, Pile.surfaceAt(w.x), CONFIG.R0 * 0.85,
+        var atWork = w.state === 'toSite' || w.state === 'building';
+        drawMiniGuy(ctx, w.x, Pile.surfaceAt(w.x), cr * 0.85,
                     PALETTE[i % Math.max(1, Econ.colorCount())].hex,
-                    w.phase, busy && w.carry);
+                    w.phase, atWork);
       }
     }
 
@@ -326,13 +493,13 @@
         var w2 = Math.sqrt(v2 * (tallest.t === 'tower' ? 0.45 : 1.4));
         var h2 = v2 / w2;
         var bx = tallest.x, by = ty - h2 * (tallest.t === 'tower' ? 1.12 : 1.0);
-        drawMiniGuy(ctx, bx, by, CONFIG.R0 * 0.9, '#ffe066', animClock, false);
+        drawMiniGuy(ctx, bx, by, cr * 0.9, '#ffe066', animClock, false);
         // floating notes
         var nt = animClock % 2;
         ctx.globalAlpha = Math.max(0, 1 - nt);
         ctx.fillStyle = '#ffe066';
-        ctx.font = '900 ' + CONFIG.R0 * 2.2 + 'px "Segoe UI", sans-serif';
-        ctx.fillText('♪', bx + CONFIG.R0 * 2, by - CONFIG.R0 * 3 - nt * CONFIG.R0 * 4);
+        ctx.font = '900 ' + cr * 2.2 + 'px "Segoe UI", sans-serif';
+        ctx.fillText('♪', bx + cr * 2, by - cr * 3 - nt * cr * 4);
         ctx.globalAlpha = 1;
       }
     }
@@ -340,8 +507,13 @@
     // the Doomsayer and his sign
     if (doomsayer) {
       var dx = doomsayer.x, dy = Pile.surfaceAt(dx);
-      var r2 = CONFIG.R0;
-      drawMiniGuy(ctx, dx, dy, r2, '#c9cfe0', Math.sin(animClock * 3) * 0.3, false);
+      var r2 = cr;
+      var wobPhase = Math.sin(animClock * 3) * 0.3;
+      var bobVal = Math.abs(Math.sin(wobPhase)) * r2 * 0.35;
+      // exact drawn center this frame — js/doomcam.js locks its camera here
+      // so he sits rock-steady in the inset while the world sways around him
+      doomsayer.camX = dx; doomsayer.camY = dy - r2 - bobVal;
+      drawMiniGuy(ctx, dx, dy, r2, '#c9cfe0', wobPhase, false);
       ctx.save();
       ctx.translate(dx + r2 * 1.6, dy - r2 * 2.2);
       ctx.rotate(Math.sin(animClock * 3) * 0.07);
@@ -356,8 +528,9 @@
       ctx.fillStyle = '#a33';
       ctx.font = '900 ' + r2 * 0.85 + 'px "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('THE END', 0, -r2 * 1.6);
-      ctx.fillText('IS NEAR', 0, -r2 * 0.6);
+      var sign = doomsayer.sign || DOOM_SAYINGS[0];
+      ctx.fillText(sign[0], 0, -r2 * 1.6);
+      ctx.fillText(sign[1], 0, -r2 * 0.6);
       ctx.restore();
     }
   }
@@ -377,12 +550,13 @@
     workers = [];
     pyramid = null;
     doomsayer = null;
+    doomed = [];
     vindicated = (d && d.vindicated) || 0;
     if (d && d.structures) {
       for (var i = 0; i < d.structures.length; i++) {
         var s = d.structures[i];
         if (s.t !== 'hut' && s.t !== 'tower') continue;
-        structures.push({ t: s.t, x: s.x, progress: s.p, done: s.p >= 1,
+        structures.push({ t: s.t, x: s.x, progress: s.p, done: s.p >= 1, popT: null,
                           baseY: Pile.surfaceAt(s.x),
                           seed: Math.random() * 1000 });
       }
@@ -398,9 +572,12 @@
   }
 
   window.Society = {
-    tick: tick, render: render, flipDestroy: flipDestroy,
+    tick: tick, render: render, flipDoom: flipDoom, crushTick: crushTick,
     structureVolume: structureVolume, incomeRate: incomeRate,
     serialize: serialize, restore: restore, reset: reset,
-    get structuresRef() { return structures; }
+    castR: castR, // js/doomcam.js needs this to frame him consistently every era
+    get structuresRef() { return structures; },
+    get doomedRef() { return doomed; },
+    get doomsayerRef() { return doomsayer; }
   };
 })();
