@@ -61,9 +61,12 @@
     var H = C.GLASS_H0 * s;
     var W = C.GLASS_W0 * s;
     var bulbHW = W / 2;
-    var neckHW = Math.min(
-      C.NECK_HW0 * Math.pow(C.NECK_GROWTH, era - 1) * (neckMult || 1),
-      bulbHW * C.NECK_HW_MAX_FRAC);
+    // s4 wide-glass inversion: stock throat is NECK_OPEN_FRAC of the bulb;
+    // neckMult (< 1, from Bottleneck Throttle levels) cinches it, floored so
+    // sand can always physically flow.
+    var neckHW = Math.max(
+      C.R0 * C.NECK_MIN_HW_R0,
+      bulbHW * C.NECK_OPEN_FRAC * (neckMult || 1));
     var neckLen = H * C.NECK_LEN_FRAC;
     var profile = buildProfile(H, bulbHW, neckHW, neckLen);
     var hwAt = hwAtFactory(profile);
@@ -155,14 +158,19 @@
   // Draw everything BEHIND the world-inside-the-glass.
   function drawBack(ctx, glass) {
     var t = glass.thickness;
-    // warm glow — the little world is the light source
+    // warm glow — the little world is the light source. Fill the gradient's
+    // exact falloff CIRCLE, never a rect: a rect edge slices the residual
+    // low-alpha warmth in straight lines (Zach's "orange transparent square",
+    // s4 — invisible while the ground band hid the seam, glaring without it).
     var g = ctx.createRadialGradient(0, glass.H * 0.28, glass.W * 0.1,
                                      0, glass.H * 0.18, glass.H * 0.85);
     g.addColorStop(0, 'rgba(255,190,110,0.16)');
     g.addColorStop(0.5, 'rgba(255,170,90,0.05)');
     g.addColorStop(1, 'rgba(255,170,90,0)');
     ctx.fillStyle = g;
-    ctx.fillRect(-glass.W, -glass.H * 0.75, glass.W * 2, glass.H * 1.8);
+    ctx.beginPath();
+    ctx.arc(0, glass.H * 0.18, glass.H * 0.85, 0, Math.PI * 2);
+    ctx.fill();
 
     // glass body (outer silhouette), faint cool fill
     tracePath(ctx, glass, t);
@@ -188,6 +196,19 @@
     ctx.lineWidth = Math.max(2.5, t * 0.38);
     ctx.strokeStyle = 'rgba(210,228,255,0.5)';
     ctx.stroke();
+
+    // s4 (Zach): the GOAL LINE — the tower must reach this to clear the
+    // level. Dashed red across the throat's mouth, in the same chunky ink
+    // weight as everything else.
+    var glw = Math.max(3, t * 0.45);
+    ctx.strokeStyle = 'rgba(255,82,82,0.9)';
+    ctx.lineWidth = glw;
+    ctx.setLineDash([glw * 2.2, glw * 1.6]);
+    ctx.beginPath();
+    ctx.moveTo(-glass.neckHW, glass.neckBottomY);
+    ctx.lineTo(glass.neckHW, glass.neckBottomY);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
     // shine streaks on the top-left of each bulb
     ctx.save();

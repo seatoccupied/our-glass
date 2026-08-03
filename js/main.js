@@ -201,22 +201,9 @@
     grad.addColorStop(1, '#0a1020');
     c.fillStyle = grad;
     c.fillRect(0, 0, CW, CH);
-
-    // dune silhouettes (ground-level — stays fixed while the sky turns)
-    c.fillStyle = '#0a0f1e';
-    c.beginPath();
-    c.moveTo(0, CH);
-    for (var dx = 0; dx <= CW; dx += 20) {
-      c.lineTo(dx, CH - CH * 0.06 * (1 + Math.sin(dx * 0.0016 + 1.3)) - CH * 0.01);
-    }
-    c.lineTo(CW, CH); c.closePath(); c.fill();
-    c.fillStyle = '#070b13';
-    c.beginPath();
-    c.moveTo(0, CH);
-    for (var dx2 = 0; dx2 <= CW; dx2 += 20) {
-      c.lineTo(dx2, CH - CH * 0.035 * (1 + Math.sin(dx2 * 0.003 + 4)));
-    }
-    c.lineTo(CW, CH); c.closePath(); c.fill();
+    // (s4: dune silhouettes removed — full night sky, the hourglass floats.
+    // The rotating stars used to pass "through" the fixed dunes and looked
+    // janky at ground level.)
   }
 
   function buildVignette() {
@@ -324,19 +311,103 @@
     c.fillStyle = g;
     c.beginPath(); c.arc(cx, cy, haloR, 0, U.TAU); c.fill();
 
-    c.fillStyle = '#d9def0';
-    c.beginPath(); c.arc(cx, cy, mr, 0, U.TAU); c.fill();
-
-    // phase: same crescent geometry (punch a dark circle out of the disk),
-    // now driven by moonPhase instead of a fixed offset. +0.25 shifts the
-    // starting phase away from a near-invisible "new moon" default.
+    // phase: 8 steps per cycle, one per flip. ts 0 = new, 0.5 = full; +0.25
+    // starts era 1 on a friendly waxing half instead of an invisible new moon.
+    // s4 (Zach): REAL phase geometry — lit region = limb semicircle +
+    // elliptical terminator over a dim earthshine disc (the old punched
+    // circle read as "a black dot on a full moon") — and the man in the moon
+    // is one of the little guys, his face keyed to the phase: wide awake at
+    // full, easy smile at half/gibbous, drowsy at crescent, asleep at new.
     var t = (((moonPhase % 8) + 8) % 8) / 8;
     var ts = (t + 0.25) % 1;
-    var cov = ts < 0.5 ? ts / 0.5 : 1 - (ts - 0.5) / 0.5; // 0 (new) -> 1 (full) -> 0
-    var dirSign = ts < 0.5 ? 1 : -1;
-    var offX = mr * (0.05 + cov * 1.35) * dirSign;
-    c.fillStyle = '#070b16';
-    c.beginPath(); c.arc(cx + offX, cy - mr * 0.18, mr * 0.86, 0, U.TAU); c.fill();
+    var f = (1 - Math.cos(U.TAU * ts)) / 2;   // lit fraction: 0 new .. 1 full
+    var waxing = ts < 0.5;
+
+    // earthshine: the unlit moon is a barely-there disc, not a hole in the sky
+    c.fillStyle = '#161d33';
+    c.beginPath(); c.arc(cx, cy, mr, 0, U.TAU); c.fill();
+
+    // lit region, drawn waxing (lit limb on the right); the whole face-lit
+    // moon mirrors horizontally when waning, face included.
+    c.save();
+    c.translate(cx, cy);
+    if (!waxing) c.scale(-1, 1);
+    var k = 2 * f - 1;              // terminator bow: -1 crescent .. +1 full
+    var rx = Math.abs(k) * mr;
+    function litPath() {
+      c.beginPath();
+      c.arc(0, 0, mr, -Math.PI / 2, Math.PI / 2, false);  // down the lit limb
+      if (k >= 0) c.ellipse(0, 0, rx, mr, 0, Math.PI / 2, Math.PI * 1.5, false); // gibbous: bow into the dark
+      else        c.ellipse(0, 0, rx, mr, 0, Math.PI / 2, -Math.PI / 2, true);   // crescent: bow into the light
+      c.closePath();
+    }
+    if (f > 0.02) {
+      litPath();
+      c.fillStyle = '#d9def0';
+      c.fill();
+    }
+
+    // The man in the moon is one of the little guys. His face lives ONLY in
+    // the lit part (clipped to it, centred in it, shrunk to fit a crescent
+    // sliver), and every phase gets its own silly expression (Zach, s4).
+    // step: 0 half-wax · 1 gibbous-wax · 2 FULL · 3 gibbous-wane ·
+    //       4 half-wane · 5 crescent-wane · 6 new (faceless) · 7 crescent-wax
+    if (f > 0.02) {
+      var step = ((moonPhase % 8) + 8) % 8;
+      var xTerm = -k * mr;                  // terminator x at the equator
+      var fx = (xTerm + mr) / 2;            // middle of the light
+      var s = Math.min(1, (mr - xTerm) / (0.9 * mr)); // fit the sliver
+      litPath();
+      c.save();
+      c.clip();
+      c.translate(fx, 0);
+      c.scale(s, s);
+      c.strokeStyle = '#252e52'; c.fillStyle = '#252e52';
+      c.lineWidth = Math.max(1.5, mr * 0.1) / Math.max(0.45, s);
+      c.lineCap = 'round';
+      var ex = mr * 0.34, ey = -mr * 0.14, er = mr * 0.12;
+      if (step === 0) {        // goofy tongue-out grin
+        c.beginPath(); c.arc(-ex, ey, er, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(ex, ey, er, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(0, mr * 0.18, mr * 0.3, 0, Math.PI, false); c.stroke();
+        c.beginPath(); c.arc(mr * 0.13, mr * 0.5, mr * 0.14, 0, U.TAU); c.fill();
+      } else if (step === 1) { // cross-eyed derp + squiggle mouth
+        c.beginPath(); c.arc(-ex, ey, er * 1.5, 0, U.TAU); c.stroke();
+        c.beginPath(); c.arc(ex, ey, er * 1.5, 0, U.TAU); c.stroke();
+        c.beginPath(); c.arc(-ex + er * 0.7, ey + er * 0.4, er * 0.55, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(ex - er * 0.7, ey - er * 0.4, er * 0.55, 0, U.TAU); c.fill();
+        c.beginPath();
+        c.arc(-mr * 0.12, mr * 0.34, mr * 0.12, Math.PI, 0, true);
+        c.arc(mr * 0.12, mr * 0.34, mr * 0.12, Math.PI, 0, false);
+        c.stroke();
+      } else if (step === 2) { // FULL: ecstatic — brows, huge eyes, open grin
+        c.beginPath(); c.arc(-ex, ey, er * 1.4, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(ex, ey, er * 1.4, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(-ex, ey - er * 2.2, er * 1.5, Math.PI * 1.15, Math.PI * 1.85, false); c.stroke();
+        c.beginPath(); c.arc(ex, ey - er * 2.2, er * 1.5, Math.PI * 1.15, Math.PI * 1.85, false); c.stroke();
+        c.beginPath(); c.arc(0, mr * 0.2, mr * 0.36, Math.PI * 0.1, Math.PI * 0.9, false);
+        c.closePath(); c.fill();
+      } else if (step === 3) { // cheeky wink + smirk
+        c.beginPath(); c.arc(-ex, ey, er * 1.15, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(ex, ey, er * 1.15, Math.PI * 0.15, Math.PI * 0.85, false); c.stroke();
+        c.beginPath(); c.arc(-mr * 0.05, mr * 0.42, mr * 0.22, Math.PI * 1.25, Math.PI * 1.95, true); c.stroke();
+      } else if (step === 4) { // whistling: relaxed arc eyes + little o mouth
+        c.beginPath(); c.arc(-ex, ey, er, Math.PI * 1.15, Math.PI * 1.85, false); c.stroke();
+        c.beginPath(); c.arc(ex, ey, er, Math.PI * 1.15, Math.PI * 1.85, false); c.stroke();
+        c.beginPath(); c.arc(mr * 0.06, mr * 0.34, mr * 0.1, 0, U.TAU); c.stroke();
+      } else if (step === 5) { // zonked: half-lids + open drooly mouth
+        c.beginPath(); c.moveTo(-ex - er, ey); c.lineTo(-ex + er, ey + er * 0.4); c.stroke();
+        c.beginPath(); c.moveTo(ex - er, ey + er * 0.4); c.lineTo(ex + er, ey); c.stroke();
+        c.beginPath(); c.arc(0, mr * 0.36, mr * 0.13, 0, U.TAU); c.fill();
+        c.beginPath(); c.moveTo(mr * 0.1, mr * 0.46); c.lineTo(mr * 0.12, mr * 0.62); c.stroke();
+      } else if (step === 7) { // peeking sliver: one huge surprised eye
+        c.beginPath(); c.arc(0, ey, er * 1.9, 0, U.TAU); c.stroke();
+        c.beginPath(); c.arc(0, ey, er * 0.8, 0, U.TAU); c.fill();
+        c.beginPath(); c.arc(0, mr * 0.38, mr * 0.09, 0, U.TAU); c.stroke();
+      }                        // step 6 = new moon: nothing lit, no face
+      c.restore();
+    }
+    c.restore();
   }
 
   function initDust() {
@@ -476,7 +547,7 @@
   // ---------- era / glass management ----------
 
   function rebuildGlass() {
-    // same era, new neck (Throat Polish) — keep the pile
+    // same era, new neck (Bottleneck Throttle) — keep the pile
     var snap = Pile.serialize();
     glass = Glass.build(Econ.era, Econ.neckMult());
     Pile.init(glass);
@@ -505,15 +576,19 @@
     // only the 180° rotation freezes the world; the crush that follows is a
     // real physical collapse and the sim has to be running for it
     if (!Flip.frozen()) {
-      spawnAcc += dt;
-      var interval = Econ.dropInterval();
-      var burst = 0;
-      while (spawnAcc >= interval && burst < 6) {
-        spawnAcc -= interval;
-        Guys.drop(Econ.dropCount(), glass);
-        burst++;
-      }
-      if (spawnAcc > interval * 4) spawnAcc = 0;
+      // s4: the rain pauses while the glass sits FULL — nothing tops up the
+      // chamber while the world waits for the player's flip (no auto-flip)
+      if (Flip.state !== 'FULL') {
+        spawnAcc += dt;
+        var interval = Econ.dropInterval();
+        var burst = 0;
+        while (spawnAcc >= interval && burst < 6) {
+          spawnAcc -= interval;
+          Guys.drop(Econ.dropCount(), glass);
+          burst++;
+        }
+        if (spawnAcc > interval * 4) spawnAcc = 0;
+      } else spawnAcc = 0;
       Phys.step(dt, glass, gameT);
       Pile.drainStep(dt, Econ.drainRate());
       Pile.settleTick(dt);
@@ -782,6 +857,17 @@
                   glassRef: function () { return glass; },
                   update: update,   // exposed for the selftest
                   render: render,   // exposed for perf probing
+                  // dev preview harness only (moon taste passes): bake the
+                  // sprite at any phase and hand back a PNG data URL
+                  _devMoonSprite: function (p) {
+                    var keep = moonPhase;
+                    moonPhase = ((p % 8) + 8) % 8;
+                    buildMoonSprite();
+                    var url = moonSprite.toDataURL('image/png');
+                    moonPhase = keep;
+                    buildMoonSprite();
+                    return url;
+                  },
                   get gameT() { return gameT; } };
 
   if (document.readyState === 'loading') {

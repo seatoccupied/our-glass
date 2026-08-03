@@ -31,7 +31,9 @@
       if (Pile.fillFraction() >= 1) enterFull();
     } else if (state === 'FULL') {
       fullTimer += dt;
-      if (fullTimer >= CONFIG.FLIP_AUTO_SECONDS) doFlip();
+      // s4 (Zach): NO auto-flip — the flip is the player's best moment and
+      // nobody takes it from them. The rain pauses at FULL (main.js) and the
+      // world waits, klaxon sung, button pulsing, for as long as it takes.
     } else if (state === 'ROTATING') {
       anim.t += dt / CONFIG.FLIP_ROTATE_SECONDS;
       confettiAcc += dt;

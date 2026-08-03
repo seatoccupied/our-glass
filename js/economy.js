@@ -71,7 +71,7 @@
     if (Econ.era < 6) return 0.0005;
     return 0.002 + 0.004 * l;
   }
-  function neckMult(l) { l = l == null ? lvl('neck') : l; return Math.pow(1.12, l); } // ✏️ TUNE: per-level throat-width step
+  function neckMult(l) { l = l == null ? lvl('neck') : l; return Math.pow(CONFIG.NECK_TIGHTEN, l); } // s4 INVERTED: each level TIGHTENS the throat
 
   function sandPerGuy(r, gold) {
     var rr = (r || guyR()) / CONFIG.R0;
@@ -138,11 +138,15 @@
 
   // ---------- the flip, stage 2: how fast the mountain comes down ----------
 
-  // A wider throat pours faster. Measured against the era's stock neck so the
-  // Throat Polish upgrade is the only thing that moves it.
+  // s4 inversion note: the throttle rules the TOWER (tighter = taller,
+  // sooner). The atomization pour deliberately does NOT slow with it — the
+  // post-flip release is a spectacle beat Zach tuned via ATOMIZE_FLOW, and
+  // punishing the core upgrade with a longer wait would fight the loop
+  // (first coupling attempt bloated era-8's pour to half the era in the
+  // sim). neckSpeed stays for probes/UI as the tightness readout.
   function neckSpeed(g) {
-    var stock = CONFIG.NECK_HW0 * Math.pow(CONFIG.NECK_GROWTH, (g.era || 1) - 1);
-    return U.clamp(g.neckHW / Math.max(1e-6, stock), 1, 4);
+    var stock = g.bulbHW * CONFIG.NECK_OPEN_FRAC;
+    return U.clamp(g.neckHW / Math.max(1e-6, stock), 0.05, 1);
   }
 
   // Guys/sec for the whole atomization stage, frozen when it starts.
@@ -155,7 +159,7 @@
     var rainVol = dropCount() / dropInterval() * Math.PI * guyR() * guyR();
     var credit = Pile.top.volume / Pile.top.count;
     if (!(credit > 0)) return 0;
-    return CONFIG.ATOMIZE_FLOW * neckSpeed(g) * rainVol / credit;
+    return CONFIG.ATOMIZE_FLOW * rainVol / credit;
   }
 
   function earnPassive(dt) {
@@ -174,6 +178,7 @@
   function visibleUpgrades() {
     var out = [];
     for (var i = 0; i < UPGRADES.length; i++) {
+      if (UPGRADES[i].shelved) continue;  // s4 shelf — hidden from UI and sim buyer alike
       if (Econ.era >= UPGRADES[i].era) out.push(UPGRADES[i]);
     }
     return out;
@@ -195,6 +200,10 @@
   Econ.colorCount = colorCount;
   Econ.varietyMult = varietyMult;
   Econ.goldChance = goldChance;
+  Econ.bardMult = bardMult;   // s4: were never exported — ui.js tooltips call
+  Econ.deepMult = deepMult;   // them, which threw at era 5+/7+ and killed the
+                              // refresh() loop mid-card (Zach's "no numbers,
+                              // false-clickable" repro; test/cdp-upgrade-cards.js)
   Econ.neckMult = neckMult;
   Econ.sandPerGuy = sandPerGuy;
   Econ.avgSandPerGuy = avgSandPerGuy;

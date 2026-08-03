@@ -6,6 +6,8 @@
   var bodies = [];
   var lastNeckPassT = 0;   // game-time a guy last cleared the neck (anti-softlock)
   var curGlass = null;     // set each step; pair code needs the neck zone
+  var awakeScratch = [];   // reused each frame by the grounded-chain sweep
+  function byYDesc(p, q) { return q.y - p.y; }
 
   // the throat is polished glass — sand can't grip there, or it arches over
   // the opening and clogs the whole hourglass
@@ -27,6 +29,7 @@
       // Atomized guys are drawn tiny but carry a full share of the mountain's
       // sand — see the volume-credit invariant in js/pile.js. null for rain.
       vol: opts.vol != null && opts.vol > 0 ? opts.vol : null,
+      charIdx: opts.charIdx != null ? opts.charIdx : null, // s4 Strange One index
       touch: 0,
       support: null,
       settled: false,             // scored and at rest — but still living sand
@@ -64,42 +67,74 @@
       b.vx = tvx * CONFIG.FRICTION - vn * nx * rest;
       b.vy = tvy * CONFIG.FRICTION - vn * ny * rest;
       // impacts squash + spin from tangential slide
-      if (vn < -140) { b.squash = 1; if (window.Sound) Sound.plink(b.r, -vn, b.colorIdx); }
-      if (vn < -140 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 1.8); // ROADMAP #8: a landing sound now has a landing you can see
+      if (vn < -140) { b.squash = 1; if (window.Sound) Sound.plink(b.r, -vn, b.colorIdx, b.charIdx); }
+      if (vn < -140 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 0.9); // ROADMAP #8: a landing sound now has a landing you can see
       b.spin += (tvx * ny - tvy * nx) * 0.02;
     }
     return true;
   }
 
-  // spatial hash for circle-circle
+  // Spatial hash for circle-circle. s4 perf pass:
+  //  - the Map persists across frames (clear() keeps its capacity) and cells
+  //    are intrusive linked lists via b._next — ZERO allocations per frame
+  //    (the old build made a fresh Map + arrays 60x/second, pure GC churn).
+  //  - only AWAKE bodies hunt for contacts. Sleepers are furniture: they
+  //    appear as neighbors to bump into but never scan (their burial/support
+  //    bookkeeping moved to a geometric probe in step()). With ~70-80% of a
+  //    mature pile asleep, most of the old pair pass simply vanishes.
+  var gridMap = new Map();
+  var gridCell = 20;
   function pairPass() {
     var cell = 0, i, b;
     for (i = 0; i < bodies.length; i++) if (bodies[i].r > cell) cell = bodies[i].r;
-    cell = cell * 2.1 || 20;
-    var grid = new Map();
+    gridCell = cell * 2.1 || 20;
+    gridMap.clear();
     for (i = 0; i < bodies.length; i++) {
       b = bodies[i];
-      var cx = Math.floor(b.x / cell), cy = Math.floor(b.y / cell);
+      var cx = Math.floor(b.x / gridCell), cy = Math.floor(b.y / gridCell);
       var key = cx * 65536 + cy;
-      var arr = grid.get(key);
-      if (!arr) grid.set(key, arr = []);
-      arr.push(b);
+      b._next = gridMap.get(key) || null;
+      gridMap.set(key, b);
       b._cx = cx; b._cy = cy;
     }
     for (i = 0; i < bodies.length; i++) {
       b = bodies[i];
+      if (b.sleeping) continue;      // sleepers never initiate
       for (var ox = -1; ox <= 1; ox++) for (var oy = -1; oy <= 1; oy++) {
-        var arr2 = grid.get((b._cx + ox) * 65536 + (b._cy + oy));
-        if (!arr2) continue;
-        for (var j = 0; j < arr2.length; j++) {
-          var o = arr2[j];
-          if (o === b || o._done) continue;
-          resolvePair(b, o);
+        var o = gridMap.get((b._cx + ox) * 65536 + (b._cy + oy));
+        while (o) {
+          if (o !== b && !o._done) resolvePair(b, o);
+          o = o._next;
         }
       }
-      b._done = true;
+      b._done = true;                // awake-awake pairs dedupe exactly as before
     }
     for (i = 0; i < bodies.length; i++) bodies[i]._done = false;
+  }
+
+  // Sleeper bookkeeping without the pair pass: walk the 3x3 grid cells once
+  // and answer "how buried am I, and is anything still holding me up?"
+  function sleeperProbe(b) {
+    var cover = 0, held = false;
+    for (var ox = -1; ox <= 1; ox++) for (var oy = -1; oy <= 1; oy++) {
+      var o = gridMap.get((b._cx + ox) * 65536 + (b._cy + oy));
+      while (o) {
+        if (o !== b) {
+          var rx = Math.abs(o.x - b.x), span = (b.r + o.r) * 0.9;
+          if (rx < span) {
+            var dy = o.y - b.y, near = (b.r + o.r) * 1.35;
+            // cover = touching-range above AND steeply so (same ~56° cone the
+            // old contact-pair test used: ny > 0.55 ≈ height > 0.87×offset).
+            // A wide cone baked half the raft in a second; a visible guy
+            // popping into texture is the exact sin we're killing.
+            if (dy < -b.r * 0.6 && -dy < near && -dy > rx * 0.87) cover++;
+            else if (dy > b.r * 0.6 && dy < near) held = true;  // under me
+          }
+        }
+        o = o._next;
+      }
+    }
+    return { cover: cover, held: held };
   }
 
   function wake(b) {
@@ -139,7 +174,10 @@
       var vn0 = (m.vx * nx + m.vy * ny) * sign;
       if (vn0 < 0) {
         m.vx -= sign * vn0 * nx * 1.15; m.vy -= sign * vn0 * ny * 1.15;
-        if (vn0 < -170 || overlap > s.r * 0.55) wake(s);
+        // wake only on a genuinely hard hit (a real landing splashes — that
+        // ripple is the charm) — slow neighbor-jostles get absorbed instead
+        // of chain-waking the whole surface (s4 perpetual-motion fix)
+        if (vn0 < -230 || overlap > s.r * 0.65) wake(s);
       }
       // grip: sleepers hold movers back (tangential friction)
       var mu0 = frictionAt(m.y);
@@ -238,8 +276,8 @@
             var vnb = b.vx * nnx + b.vy * nny;
             if (vnb < 0) {
               b.vx -= vnb * nnx * 1.18; b.vy -= vnb * nny * 1.18;
-              if (vnb < -150) { b.squash = 1; if (window.Sound) Sound.plink(b.r, -vnb, b.colorIdx); }
-              if (vnb < -150 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 1.8); // ROADMAP #8
+              if (vnb < -150) { b.squash = 1; if (window.Sound) Sound.plink(b.r, -vnb, b.colorIdx, b.charIdx); }
+              if (vnb < -150 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 0.9); // ROADMAP #8
             }
             if (nny < -0.55) { b.grounded = true; b.groundContact = true; } // on the roof
           } else { // center inside: eject out the top
@@ -259,8 +297,8 @@
       if (g && b.y + b.r > g.y) {
         b.y = g.y - b.r;
         if (b.vy > 0) {
-          if (b.vy > 150) { b.squash = 1; if (window.Sound) Sound.plink(b.r, b.vy, b.colorIdx); }
-          if (b.vy > 150 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 1.8); // ROADMAP #8
+          if (b.vy > 150) { b.squash = 1; if (window.Sound) Sound.plink(b.r, b.vy, b.colorIdx, b.charIdx); }
+          if (b.vy > 150 && window.FX && FX.worldList.length <= 60) FX.puff(b.x, b.y, b.r * 0.9); // ROADMAP #8
           b.vy = -b.vy * C.RESTITUTION * 0.6;
           if (Math.abs(b.vy) < 20) b.vy = 0;
         }
@@ -277,10 +315,12 @@
     // groundedness climbs the stack: if the guy under you is grounded, so are
     // you. Bottom-most first so chains resolve in one sweep. Then crowd
     // damping — dense rafts calm down instead of jiggling forever.
-    var byY = bodies.slice().sort(function (p, q) { return q.y - p.y; });
-    for (i = 0; i < byY.length; i++) {
-      b = byY[i];
-      if (b.sleeping) continue;
+    // (s4 perf: awake bodies only, reused scratch — no slice+sort of everyone)
+    awakeScratch.length = 0;
+    for (i = 0; i < bodies.length; i++) if (!bodies[i].sleeping) awakeScratch.push(bodies[i]);
+    awakeScratch.sort(byYDesc);
+    for (i = 0; i < awakeScratch.length; i++) {
+      b = awakeScratch[i];
       if (!b.grounded && b.support && (b.support.grounded || b.support.sleeping)) {
         b.grounded = true;
       }
@@ -312,21 +352,26 @@
       b = bodies[i];
 
       if (b.sleeping) {
-        // burial: covered sleepers become pile paint (invisible change)
-        if (b.aboveN >= 2) {
-          b.coveredT += dt;
-          if (b.coveredT > 1.2) {
-            var bi = bodies.indexOf(b);
-            bodies.splice(bi, 1);
-            Pile.bakeBody(b);
-            continue;
+        // Staggered geometric probe (~3x/sec each): sleepers left the pair
+        // pass in the s4 perf pass, so burial ("become pile paint, unseen")
+        // and support ("did the ground drain out from under me?") are
+        // sampled here instead. dt is scaled by the stagger so the burial
+        // clock ticks at the same real rate it always did.
+        if (i % 20 === frameMod) {
+          var probe = sleeperProbe(b);
+          if (probe.cover >= 2) {
+            b.coveredT += dt * 20;
+            if (b.coveredT > 1.2) {
+              var bi = bodies.indexOf(b);
+              bodies.splice(bi, 1);
+              Pile.bakeBody(b);
+              continue;
+            }
+          } else if (b.coveredT > 0) b.coveredT = Math.max(0, b.coveredT - dt * 20);
+          if (!probe.held) {
+            var gs = Pile.groundAt(b.x, b.y);
+            if (!gs || gs.y - (b.y + b.r) > b.r * 1.2) wake(b);
           }
-        } else if (b.coveredT > 0) b.coveredT = Math.max(0, b.coveredT - dt);
-        // staggered support recheck: if the ground drained out from under a
-        // sleeper (and no buddy holds him), he wakes and falls
-        if (i % 20 === frameMod && !b.support) {
-          var gs = Pile.groundAt(b.x, b.y);
-          if (!gs || gs.y - (b.y + b.r) > b.r * 1.2) wake(b);
         }
         continue;
       }
@@ -349,7 +394,10 @@
       // Never while a REAL mountain plugs the throat (resting on the plug is
       // not a jam) — but a few stray clog-bakes don't count as a mountain.
       var plugged = Pile.top.volume > glass.capacity * 0.02;
-      var inNeck = Math.abs(b.y) < glass.H * 0.09 &&
+      // s4: only a guy who came from ABOVE can "jam" — the tower rising from
+      // below now legitimately parks guys near the throat's mouth, and the
+      // comedy pop must never eat the tower's capstones.
+      var inNeck = b.wasAboveNeck && Math.abs(b.y) < glass.H * 0.09 &&
                    Math.abs(b.x) < glass.neckHW * 2.5 && !plugged;
       if (inNeck && speed < 30) {
         b.jamT += dt;
@@ -368,7 +416,12 @@
       // settle -> SCORE, but keep living. "At rest" is judged by POSITION DRIFT,
       // not speed — crowded sand jiggles fast but goes nowhere, and jiggling
       // in place absolutely counts as settled. Rolling somewhere does not.
-      b.hadGround = b.hadGround || b.groundContact;
+      // "Ground" includes resting on an already-settled buddy (s4): without
+      // that, only the bottom layer of a live stack could EVER sleep, and the
+      // raft above the baked surface boiled forever under fast rain — every
+      // layer kept the next awake (Zach's perpetual-motion chains).
+      b.hadGround = b.hadGround || b.groundContact ||
+                    !!(b.support && (b.support.sleeping || b.support.settled));
       b.driftT += dt;
       if (b.driftT >= 0.8) {
         var moved = Math.abs(b.x - b.ax) + Math.abs(b.y - b.ay);
@@ -380,9 +433,11 @@
         b.ax = b.x; b.ay = b.y; b.driftT = 0; b.hadGround = false;
       }
       // sleep is only allowed where sand legitimately rests: the bottom
-      // chamber, or on a real mountain. Never in the funnel or throat —
-      // that sand must keep flowing.
+      // chamber, on a real mountain — or (s4 tower-fill) standing ON the
+      // pile even right at the throat's mouth: the capstone guy who touches
+      // the red line must be able to settle, or the fill stalls at 99%.
       var mayRest = b.y > glass.neckBottomY + b.r ||
+                    (b.y > 0 && b.groundContact) ||
                     (b.y < glass.neckTopY && Pile.top.count > 50);
       if (!b.settled && b.calm >= 1 && mayRest) {
         b.settled = true;
@@ -419,7 +474,13 @@
     if (bodies.length > C.LIVE_CAP - 20) {
       var quietish = bodies.filter(function (q) {
         return (q.sleeping || (q.settled && q.groundContact)) && toBake.indexOf(q) < 0;
-      }).sort(function (a2, b2) { return b2.y - a2.y; });
+      }).sort(function (a2, b2) {
+        // invisible-bake preference (s4, Zach): already-buried sleepers go
+        // first — nobody the player can SEE should ever pop into texture
+        var ca = a2.coveredT > 0 ? 1 : 0, cb = b2.coveredT > 0 ? 1 : 0;
+        if (ca !== cb) return cb - ca;
+        return b2.y - a2.y;
+      });
       if (!quietish.length) {
         // prefer bottom-chamber guys; only bake the funnel queue upstairs as a
         // last resort (that's sand backing up into a pool, which then drains)

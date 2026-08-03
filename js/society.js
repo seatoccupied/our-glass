@@ -8,7 +8,7 @@
   var pyramid = null;    // {x, n, t, phase:'rising'|'standing'|'none'}
   var buildCooldown = 6;
   var pyramidCooldown = 30;
-  var doomsayer = null;  // {x, mode:'predict'|'cameo', t, sign, camX, camY} — see spawnDoomsayer()
+  var doomsayer = null;  // {x, t, sign, camX, camY} — see spawnDoomsayer()
   var vindicated = 0;    // how many times he's been proven right (gag throttle)
   var doomed = [];       // structures hanging off the inverted pile mid-crush
   var animClock = 0;     // shared animation clock — advanced in tick() (dt-based) so
@@ -16,13 +16,6 @@
                           // does exactly that) without speeding animation up
 
   var POP_SECONDS = 0.35; // ✏️ TUNE: how long a structure's completion overshoot lasts
-
-  // ✏️ TUNE: how often the Doomsayer makes an unscheduled CAMEO appearance,
-  // independent of fill — on top of (never instead of) the dramatic near-full
-  // PREDICTION trigger below, which still owns the vindicated payoff.
-  var DOOM_CAMEO_EVERY = 40;
-  var DOOM_CAMEO_SECONDS = 12; // how long a cameo stays on stage
-  var doomCameoT = DOOM_CAMEO_EVERY * (0.4 + Math.random() * 0.5);
 
   // Rotating sign texts, dry deadpan "the end is near" energy. Each entry is
   // the sign's two lines. vindicated<=3 payoff cap is untouched — this only
@@ -43,11 +36,22 @@
   function era() { return Econ.era; }
   function unlocked() { return era() >= 2; }
 
+  // s4 shelf: a shelved upgrade (config.js UPGRADES) silences the sim under
+  // it too — no huts/towers while 'builders' is shelved, no pyramids while
+  // 'stackers' is (Zach's full-off call, 2026-08-01). Workers, bards, and
+  // the prophet stay on stage.
+  function shelved(id) {
+    for (var i = 0; i < UPGRADES.length; i++)
+      if (UPGRADES[i].id === id) return !!UPGRADES[i].shelved;
+    return false;
+  }
+
   function maxStructures() {
     return Math.min(10, 1 + Math.floor(Econ.lvl('builders') / 2) + Math.min(3, era() - 2));
   }
   function buildSpeed() { return 1 / (26 / (1 + Econ.lvl('builders') * 0.35)); } // progress/sec
   function workerTarget() {
+    if (shelved('builders')) return 0; // s4: Zach — empty stage while shelved
     return unlocked() ? Math.min(14, 3 + Econ.lvl('builders') + (era() - 2)) : 0;
   }
 
@@ -129,10 +133,10 @@
              flag: '#ff6b6b', trim: null };
   }
 
-  function spawnDoomsayer(g, mode) {
+  function spawnDoomsayer(g) {
     // camX/camY start null (not yet drawn) — js/doomcam.js falls back to his
     // base position for the one frame before render() below fills them in
-    return { x: (Math.random() < 0.5 ? -1 : 1) * g.bulbHW * 0.55, mode: mode, t: 0,
+    return { x: (Math.random() < 0.5 ? -1 : 1) * g.bulbHW * 0.55, t: 0,
              sign: DOOM_SAYINGS[(Math.random() * DOOM_SAYINGS.length) | 0],
              camX: null, camY: null };
   }
@@ -145,7 +149,8 @@
 
     // commission new structures — anchored to the surface where they're built
     buildCooldown -= dt;
-    if (buildCooldown <= 0 && structures.length < maxStructures() && Pile.bottom.count > 25) {
+    if (!shelved('builders') &&
+        buildCooldown <= 0 && structures.length < maxStructures() && Pile.bottom.count > 25) {
       var wantTower = Econ.lvl('builders') >= 3 && Math.random() < 0.4;
       var sx = (Math.random() - 0.5) * g.bulbHW * 1.35;
       structures.push({
@@ -176,7 +181,7 @@
     }
 
     // pyramids
-    if (era() >= 4 && Econ.lvl('stackers') > 0) {
+    if (era() >= 4 && !shelved('stackers') && Econ.lvl('stackers') > 0) {
       if (!pyramid) {
         pyramidCooldown -= dt;
         if (pyramidCooldown <= 0 && Pile.bottom.count > 60) {
@@ -240,27 +245,18 @@
       }
     }
 
-    // the Doomsayer: the dramatic near-full PREDICTION (unchanged — vindicated
-    // only ever tracks THIS trigger) plus more frequent unscheduled CAMEOS
-    // (✏️ TUNE DOOM_CAMEO_EVERY) so he's a familiar face long before the
-    // flip is close, not just a one-note klaxon-adjacent warning.
+    // the Doomsayer: the dramatic near-full PREDICTION only (s4: Zach cut the
+    // unscheduled cameos — he shows up when the end really is near, keeping
+    // the rotating sayings and the doomcam window).
     if (!doomsayer) {
       if (Pile.fillFraction() >= CONFIG.DOOM_FILL && Pile.bottom.count > 20) {
-        doomsayer = spawnDoomsayer(g, 'predict');
+        doomsayer = spawnDoomsayer(g);
         if (vindicated < 3) UI.toast('A prophet appears',
           'One little guy has made a sign. It says the end is near. The others are not listening.');
-      } else {
-        doomCameoT -= dt;
-        if (doomCameoT <= 0 && Pile.bottom.count > 20) {
-          doomsayer = spawnDoomsayer(g, 'cameo');
-          doomCameoT = DOOM_CAMEO_EVERY * (0.7 + Math.random() * 0.6);
-        }
       }
     } else {
       doomsayer.t += dt;
-      if (doomsayer.mode === 'predict') {
-        if (Pile.fillFraction() < CONFIG.DOOM_FILL * 0.9) doomsayer = null;
-      } else if (doomsayer.t > DOOM_CAMEO_SECONDS) doomsayer = null;
+      if (Pile.fillFraction() < CONFIG.DOOM_FILL * 0.9) doomsayer = null;
     }
   }
 
@@ -277,9 +273,8 @@
       doomed.push({ t: s.t, x: mapX(s.x), progress: s.progress, done: s.done,
                     seed: s.seed, dieIn: dur * (0.15 + 0.7 * Math.random()) });
     }
-    // only a genuine PREDICTION (near-full fill, not an unrelated cameo) ever
-    // pays out the "he was right" gag — cameos are flavor, not prophecy.
-    if (doomsayer && doomsayer.mode === 'predict' && vindicated < 3) {
+    // an on-stage prophecy pays out the "he was right" gag (capped at 3)
+    if (doomsayer && vindicated < 3) {
       vindicated++;
       setTimeout(function () {
         UI.toast('The prophet was right',
@@ -292,7 +287,6 @@
     doomsayer = null;
     buildCooldown = 14; // they need a moment to grieve (and land)
     pyramidCooldown = 40;
-    doomCameoT = DOOM_CAMEO_EVERY * (0.5 + Math.random() * 0.6);
     Pile.setObstacles([]);
   }
 

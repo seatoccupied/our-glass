@@ -265,22 +265,19 @@
     return b.vol != null && b.vol > 0 ? b.vol : Math.PI * b.r * b.r;
   }
 
-  // Paint enough grains to match the volume a body actually adds to the
-  // heightfield. A tiny guy carrying 5-6 guys' worth of sand needs 5-6 stamps
-  // or the pile's ink slowly thins out under a rising surface.
+  // Paint ink to match the volume a body actually adds to the heightfield.
+  // An atomized tiny guy bakes as ONE grain at his volume-equivalent radius —
+  // exactly the circle a normal guy of that sand would leave. (The old
+  // approach scattered N tiny stamps at his drawn size; random scatter can't
+  // tile an area, and the shortfall accumulated into dark voids inside the
+  // pile — Zach's s4 viewfinder catch.)
   function stampForVolume(b, area) {
-    var own = Math.max(1, Math.PI * b.r * b.r);
-    var n = Math.max(1, Math.min(6, Math.round(area / own)));
-    if (n === 1) { Guys.stampGuy(pileCtx, b); return; }
-    var spread = Math.sqrt(area / Math.PI);
-    for (var k = 0; k < n; k++) {
-      Guys.stampGuy(pileCtx, {
-        x: b.x + (Math.random() - 0.5) * spread * 1.8,
-        y: b.y + (Math.random() - 0.5) * spread * 1.8,
-        r: b.r, angle: Math.random() * U.TAU, colorIdx: b.colorIdx,
-        gold: b.gold, face: b.face, squash: 0
-      });
-    }
+    var rEq = Math.sqrt(area / Math.PI);
+    if (rEq <= b.r * 1.05) { Guys.stampGuy(pileCtx, b); return; }
+    Guys.stampGuy(pileCtx, {
+      x: b.x, y: b.y, r: rEq, angle: b.angle || 0, colorIdx: b.colorIdx,
+      gold: b.gold, face: b.face, squash: 0
+    });
   }
 
   function bakeBody(b) {
@@ -996,9 +993,25 @@
 
   function fillFraction() {
     if (!glass) return 0;
-    // the living surface skin counts — those guys are part of the fill too,
-    // and a tiny atomized guy counts for the sand he carries, not his sprite
-    return Math.min(1.25, currentVolume() / glass.capacity);
+    // s4 TOWER-FILL (Zach's wide-glass inversion): the level clears when the
+    // pile's PEAK — baked heightfield plus the living settled guys riding on
+    // it — reaches the red line at the throat's mouth (neckBottomY). A
+    // tighter throttle funnels the rain into a narrower, taller tower, so
+    // the upgrade directly buys faster levels.
+    var goal = glass.floorY - glass.neckBottomY;
+    var peakY = glass.floorY;
+    for (var i = 0; i < cols; i++) {
+      var y = bottomSurfY(i);
+      if (y < peakY) peakY = y;
+    }
+    // the tower's top layers are LIVE (settled/sleeping, not yet baked)
+    var bs = window.Phys ? Phys.bodies : [];
+    for (var k = 0; k < bs.length; k++) {
+      var b = bs[k];
+      if ((b.settled || b.sleeping) && b.y > glass.neckTopY &&
+          b.y - b.r < peakY) peakY = b.y - b.r;
+    }
+    return Math.min(1.25, (glass.floorY - peakY) / Math.max(1, goal));
   }
 
   // ---------- dev tools (?dev=1 only — see js/ui.js) ----------
@@ -1056,11 +1069,16 @@
 
   // Tops the fill readout up to `frac` (e.g. 0.95) by pouring the shortfall
   // straight into the bottom pile. Returns guys added (0 if already there).
+  // s4 tower-fill: the readout is tower HEIGHT now, so chase the fraction in
+  // shrinking volume steps instead of computing one volumetric delta.
   function devFillTo(frac) {
     if (!glass) return 0;
-    var delta = frac * glass.capacity - currentVolume();
-    if (delta <= 0) return 0;
-    return devPourBottom(delta);
+    var added = 0;
+    for (var round = 0; round < 40 && fillFraction() < frac; round++) {
+      var gap = frac - fillFraction();
+      added += devPourBottom(glass.capacity * Math.max(0.01, gap * 0.35));
+    }
+    return added;
   }
 
   // Where the pile surface is, for society actors.

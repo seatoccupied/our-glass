@@ -114,6 +114,28 @@ html, body {
 
 /* ---------- FLIP button ---------- */
 #flip-slot { margin-top: 12px; min-height: 0; }
+
+/* s4: the Settle Shake tap — floats under the glass (canvas centre sits
+   half the 400px panel right of the viewport centre) */
+#settle-shake {
+  position: fixed;
+  left: calc(50% + 208px);
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 9;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink-dim);
+  background: var(--panel2);
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+#settle-shake:hover:not(:disabled) { color: var(--ink); border-color: #3d4a80; }
+#settle-shake:disabled { opacity: 0.35; cursor: default; }
+#settle-shake:active:not(:disabled) { transform: translateX(-50%) scale(0.94); }
 #flip-btn {
   width: 100%;
   padding: 18px 10px;

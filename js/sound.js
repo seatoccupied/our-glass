@@ -18,7 +18,9 @@
    thump or echoing arp). Song 1 is the original Am7-Fmaj7-Cmaj7-G7 bed.
    Playback runs ~3-minute chunks (songChunkSeconds), crossfading
    (crossfadeSeconds) into the next song from a shuffle bag that never repeats
-   immediately, forever (see schedule()/startSong()/stopSong()).
+   immediately, forever (see schedule()/startSong()/stopSong()). Until the
+   first-ever flip (Econ.counts.flips === 0) only Song 1 plays — the songbook
+   opens when the world first turns over.
 
    ---- Era layering ----
    Each song also carries 15 texture layers (ERA_PLAN/LAYER_TYPES ->
@@ -43,7 +45,8 @@
   var musicGain = null, duckGain = null, padFilter = null;
   var donkGain = null, pingGain = null, delaySend = null;
   var muted = false;
-  var vols = { music: 1, donk: 1, ping: 1 };
+  var vols = { music: 0.75, donk: 0.6, ping: 0.6 };  // pre-boot defaults; main.js
+                                                     // applies Save.volumes at init
   var plinkTimes = [];
 
   // ---- tunables ----
@@ -58,7 +61,8 @@
   var DUCK_UP_TC = 0.35;        // ✏️ TUNE: duck-recovery time constant (slow)
   var DUCK_HOLD = 0.45;         // ✏️ TUNE: seconds held down before recovery starts
   var songChunkSeconds = 180;   // ✏️ TUNE: ~3 minutes per song before crossfading
-  var crossfadeSeconds = 8;     // ✏️ TUNE: song-to-song crossfade length
+  var crossfadeSeconds = 20;    // ✏️ TUNE: song-to-song crossfade length
+                                // (8 → 20 s4: Zach wants longer, subtler handoffs)
 
   function midi(n) { return 440 * Math.pow(2, (n - 69) / 12); }
 
@@ -207,6 +211,15 @@
   var active = [];  // {song, gain, t0, chunkEnd, chordIdx, pulseIdx, next{}, layerStarted{}, ending, endAt, crossfadeStarted}
 
   function pickNextSongIdx() {
+    // s4: ONE song ("The First Grains") until the first-ever flip. The chunk
+    // scheduler then "crossfades" song 0 into itself — same code path, and the
+    // drone/layer bookkeeping restarts cleanly with each fresh entry. The
+    // flips counter persists in the save, so a reloaded post-flip world
+    // rotates from the start.
+    if (!(window.Econ && Econ.counts && Econ.counts.flips > 0)) {
+      lastSongIdx = 0;   // a fresh bag after the flip won't open on a repeat
+      return 0;
+    }
     if (!songBag.length) {
       songBag = [0, 1, 2, 3, 4];
       for (var i = songBag.length - 1; i > 0; i--) {
@@ -574,7 +587,7 @@
   // each color donks its own pentatonic note — a landing crowd plays a chord
   var COLOR_STEP = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21];
 
-  function plink(r, impact, colorIdx) {
+  function plink(r, impact, colorIdx, charIdx) {
     if (!ctx || muted) return;
     var now = performance.now();
     plinkTimes = plinkTimes.filter(function (t) { return now - t < 120; });
@@ -584,7 +597,18 @@
     var f = U.clamp(330 * (CONFIG.R0 / r) * Math.pow(2, step / 12), 110, 1500) *
             (0.98 + Math.random() * 0.04);
     var g = U.clamp(0.04 + (impact || 200) / 4500, 0.04, 0.16);
-    blip(f, 0.14, g, 'sine', null, donkGain);
+    // s4: the Strange Ones land in their own voice (CHARACTERS[].plink)
+    var wave = 'sine';
+    if (charIdx != null && window.CHARACTERS && CHARACTERS[charIdx]) {
+      var fl = CHARACTERS[charIdx].plink;
+      if (fl === 'low') f *= 0.5;
+      else if (fl === 'deep') f *= 0.33;
+      else if (fl === 'high') f *= 2;
+      else if (fl === 'airy') { wave = 'triangle'; f *= 1.25; }
+      else if (fl === 'clank') { wave = 'square'; g *= 0.55; }
+      f = U.clamp(f, 80, 2400);
+    }
+    blip(f, 0.14, g, wave, null, donkGain);
     blip(f * 0.5, 0.1, g * 0.5, 'triangle', null, donkGain);
   }
 

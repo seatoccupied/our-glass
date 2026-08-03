@@ -25,7 +25,7 @@
     // stylesheet change needed) to match main.js's hintEl/hintIcon pattern.
     els.fillHint = document.createElement('div');
     els.fillHint.id = 'fill-hint';
-    els.fillHint.textContent = 'Fill the glass, then FLIP it.';
+    els.fillHint.textContent = 'Stack the sand to the red line, then FLIP.';
     els.fillHint.style.cssText = 'font-size:12px;color:var(--ink-dim);margin-top:4px;font-weight:600;';
     $('fill-block').appendChild(els.fillHint);
 
@@ -45,7 +45,28 @@
     $('btn-reset').onclick = showReset;
 
     buildSoundSliders();
+    buildSettleShake();
     buildDevMenu();
+  }
+
+  // s4 (Zach): tap the glass — a little wiggle plus the same pile "repack" a
+  // Bottleneck Throttle purchase does (Main.rebuildGlass's serialize/restore
+  // round-trip repaints the baked texture dense, so stray gaps click shut).
+  // Purely visual medicine: volumes, counts, and economy don't move.
+  function buildSettleShake() {
+    var b = document.createElement('button');
+    b.id = 'settle-shake';
+    b.textContent = '🖐 Settle Shake';
+    b.title = 'Give the glass a gentle tap — the sand settles into place.';
+    b.onclick = function () {
+      if (b.disabled || Flip.midFlip()) return;
+      b.disabled = true;
+      Main.shake(0.5);
+      Main.rebuildGlass();
+      if (window.Sound) Sound.pop();
+      setTimeout(function () { b.disabled = false; }, 2500);
+    };
+    document.body.appendChild(b);
   }
 
   var saveDebounce = null;

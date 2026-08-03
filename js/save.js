@@ -5,7 +5,7 @@
 
   var KEY = 'ourglass-save-v1';
   var muted = false;
-  var volumes = { music: 1, donk: 1, ping: 1 };
+  var volumes = { music: 0.75, donk: 0.6, ping: 0.6 };  // s4 defaults (Zach's mix)
   var resetting = false; // blocks the unload-autosave from resurrecting a reset game
 
   function collect() {
@@ -22,12 +22,14 @@
       pile: Pile.serialize(),
       society: Society.serialize(),
       // Mid-air guys ride along — nothing is ever lost, not even on reload.
-      // The 6th slot is the atomization volume credit (0 for ordinary rain):
-      // one number per live body, never per limb, so saves stay small.
+      // The 6th slot is the atomization volume credit (0 for ordinary rain);
+      // the 7th is the Strange One index + 1 (0 = ordinary guy): one number
+      // per live body, never per limb, so saves stay small.
       live: Phys.bodies.map(function (b) {
         return [Math.round(b.x), Math.round(b.y), Math.round(b.r * 10),
                 b.colorIdx, (b.gold ? 1 : 0) + (b.earned ? 2 : 0),
-                b.vol ? Math.round(b.vol) : 0];
+                b.vol ? Math.round(b.vol) : 0,
+                b.charIdx != null ? b.charIdx + 1 : 0];
       })
     };
   }
@@ -105,8 +107,8 @@
     Econ.counts = d.counts || { spawned: 0, gold: 0, flips: 0 };
     muted = !!d.muted;
     if (d.vol && typeof d.vol === 'object') {
-      volumes = { music: num(d.vol.m, 1, 1), donk: num(d.vol.d, 1, 1),
-                  ping: num(d.vol.p, 1, 1) };
+      volumes = { music: num(d.vol.m, 0.75, 1), donk: num(d.vol.d, 0.6, 1),
+                  ping: num(d.vol.p, 0.6, 1) };
     }
     Main.rebuildGlassHard();   // builds glass for the era, Pile.init
     Pile.restore(d.pile);
@@ -117,7 +119,9 @@
         var l = d.live[i];
         Phys.spawn({ x: l[0], y: l[1], r: Math.max(2, l[2] / 10),
                      colorIdx: l[3] || 0, gold: !!(l[4] & 1), earned: !!(l[4] & 2),
-                     vol: num(l[5], 0, 1e12) });   // 0 = ordinary rain guy
+                     vol: num(l[5], 0, 1e12),      // 0 = ordinary rain guy
+                     charIdx: l[6] > 0 && l[6] <= CHARACTERS.length
+                       ? (l[6] | 0) - 1 : null }); // 7th slot: Strange One + 1
       }
     }
   }

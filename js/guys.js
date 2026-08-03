@@ -20,12 +20,28 @@
     return p ? p.hex : '#c9a86a';
   }
 
+  // (s4: polygon grain bodies tried and CUT same day — Zach: circles are the
+  // cheap ones, polygons made every contact pricier for no gain. The grainy
+  // "lays like sand" feel comes from friction + the raft-freeze sleep fix.)
+
   // ---------- spawning ----------
 
   function drop(n, glass) {
     for (var i = 0; i < n; i++) {
       var r = Econ.guyR() * (0.93 + Math.random() * 0.14);
       var gold = Math.random() < Econ.goldChance();
+      // s4: the Strange Ones — rare character sandmen, era 4+ (never gold;
+      // gold is already its own celebrity). Weighted pick from CHARACTERS.
+      var charIdx = null;
+      if (!gold && Econ.era >= 4 && window.CHARACTERS && Math.random() < CHAR_CHANCE) {
+        var wsum = 0, ci;
+        for (ci = 0; ci < CHARACTERS.length; ci++) wsum += CHARACTERS[ci].weight;
+        var roll = Math.random() * wsum;
+        for (ci = 0; ci < CHARACTERS.length; ci++) {
+          roll -= CHARACTERS[ci].weight;
+          if (roll <= 0) { charIdx = ci; break; }
+        }
+      }
       Phys.spawn({
         x: (Math.random() - 0.5) * glass.rimHW * 1.4,
         y: glass.rimY - CONFIG.SPAWN_HEIGHT - Math.random() * 60 - i * 26,
@@ -33,7 +49,8 @@
         vy: 40 + Math.random() * 60,
         r: r,
         colorIdx: (Math.random() * Econ.colorCount()) | 0,
-        gold: gold
+        gold: gold,
+        charIdx: charIdx
       });
       Econ.counts.spawned++;
       if (gold) Econ.counts.gold++;
@@ -114,33 +131,16 @@
     var sq = b.squash * 0.3;
     ctx.scale(1 + sq, 1 - sq);
 
+    // s4: the Strange Ones (rare era-4+ character sandmen). The Pale One is
+    // translucent head to toe; ctx.restore() below resets the alpha.
+    var ch = b.charIdx != null && window.CHARACTERS ? CHARACTERS[b.charIdx] : null;
+    if (ch && ch.id === 'ghost') ctx.globalAlpha = 0.55;
+
     var outline = U.shade(hex, -0.55);
     var lw = Math.max(1.5 / zoom, b.r * 0.18);
 
-    // limbs (only when big enough to matter)
-    if (sr > 6) {
-      var flail = falling ? Math.min(1, (Math.abs(b.vx) + Math.abs(b.vy)) / 400) : 0;
-      var t = animT * 10 + b.face * 2.1;
-      ctx.strokeStyle = outline;
-      ctx.lineWidth = b.r * 0.34;
-      ctx.lineCap = 'round';
-      for (var s = -1; s <= 1; s += 2) {
-        // arms
-        var aa = s * (1.9 + Math.sin(t + s) * (0.25 + flail * 1.3));
-        ctx.beginPath();
-        ctx.moveTo(s * b.r * 0.55, -b.r * 0.15);
-        ctx.lineTo(s * b.r * 0.55 + Math.sin(aa) * b.r * 0.75,
-                   -b.r * 0.15 - Math.cos(aa) * b.r * 0.75 * -1);
-        ctx.stroke();
-        // legs
-        var la = s * (0.5 + Math.sin(t * 1.3 + s * 2) * (0.15 + flail * 0.8));
-        ctx.beginPath();
-        ctx.moveTo(s * b.r * 0.35, b.r * 0.6);
-        ctx.lineTo(s * b.r * 0.35 + Math.sin(la) * b.r * 0.5,
-                   b.r * 0.6 + Math.cos(la) * b.r * 0.55);
-        ctx.stroke();
-      }
-    }
+    // (s4: limbs removed entirely — Zach's call. Simple round guys, faces
+    // carry all the personality, and every guy is cheaper to draw.)
 
     // body
     ctx.fillStyle = hex;
@@ -161,8 +161,12 @@
       ctx.restore();
     }
 
-    // face — every color is a personality (mid-air panic is universal, though)
-    if (sr > 6.5) drawFace(ctx, b, falling);
+    // face — every color is a personality (mid-air panic is universal, though).
+    // The faceless strangers (ghost/cyclops/knight) bring their own instead.
+    if (sr > 6.5 && !(ch && ch.noFace)) drawFace(ctx, b, falling);
+
+    // stranger gear rides on top of (or replaces) the face
+    if (ch && sr > 4.5) drawCharacter(ctx, b, ch);
 
     // golden sparkle: full 8-point star once large enough to read it; below
     // that, the small diamond so gold still reads at era-6 default zoom
@@ -182,6 +186,61 @@
       }
     }
     ctx.restore();
+  }
+
+  // s4: the Strange Ones' gear, drawn in body-local coords (post-rotate).
+  // Each is a few primitives in the same chunky ink as everything else.
+  function drawCharacter(ctx, b, ch) {
+    var r = b.r, ink = '#141a2b';
+    ctx.lineCap = 'round';
+    if (ch.id === 'gent') {          // top hat + monocle (lifted ink so the
+      ctx.fillStyle = '#39436f';     // crown reads against the night sky)
+      ctx.fillRect(-r * 0.5, -r * 0.92, r * 1.0, r * 0.14);
+      ctx.fillRect(-r * 0.32, -r * 1.5, r * 0.64, r * 0.6);
+      ctx.fillStyle = '#b7413f';     // a dapper hat band
+      ctx.fillRect(-r * 0.32, -r * 1.04, r * 0.64, r * 0.12);
+      ctx.strokeStyle = ink; ctx.lineWidth = r * 0.07;
+      ctx.beginPath(); ctx.arc(r * 0.32, -r * 0.18, r * 0.22, 0, U.TAU); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(r * 0.32, r * 0.04); ctx.lineTo(r * 0.34, r * 0.3); ctx.stroke();
+    } else if (ch.id === 'ghost') {  // hollow eyes + a small wail
+      ctx.strokeStyle = ink; ctx.lineWidth = r * 0.1;
+      ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.16, r * 0.15, 0, U.TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(r * 0.3, -r * 0.16, r * 0.15, 0, U.TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, r * 0.3, r * 0.14, 0, U.TAU); ctx.stroke();
+    } else if (ch.id === 'cyclops') { // The Watcher: one enormous eye
+      ctx.fillStyle = 'rgba(240,244,255,0.95)';
+      ctx.beginPath(); ctx.arc(0, -r * 0.08, r * 0.34, 0, U.TAU); ctx.fill();
+      ctx.strokeStyle = ink; ctx.lineWidth = r * 0.08;
+      ctx.beginPath(); ctx.arc(0, -r * 0.08, r * 0.34, 0, U.TAU); ctx.stroke();
+      ctx.fillStyle = ink;
+      ctx.beginPath(); ctx.arc(0, -r * 0.08, r * 0.13, 0, U.TAU); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.18, r * 0.42); ctx.lineTo(r * 0.18, r * 0.42); ctx.stroke();
+    } else if (ch.id === 'sprout') { // stem + leaf on top
+      ctx.strokeStyle = '#2e7d4f'; ctx.lineWidth = r * 0.1;
+      ctx.beginPath(); ctx.moveTo(0, -r * 0.85); ctx.quadraticCurveTo(r * 0.05, -r * 1.15, r * 0.14, -r * 1.3); ctx.stroke();
+      ctx.fillStyle = '#4dd599';
+      ctx.beginPath();
+      ctx.moveTo(r * 0.14, -r * 1.3);
+      ctx.quadraticCurveTo(r * 0.5, -r * 1.55, r * 0.62, -r * 1.28);
+      ctx.quadraticCurveTo(r * 0.38, -r * 1.12, r * 0.14, -r * 1.3);
+      ctx.fill();
+    } else if (ch.id === 'elder') {  // bushy brows + a grand beard
+      ctx.fillStyle = 'rgba(236,240,248,0.92)';
+      ctx.beginPath(); ctx.arc(0, r * 0.34, r * 0.44, 0, Math.PI, false); ctx.fill();
+      ctx.strokeStyle = 'rgba(236,240,248,0.92)'; ctx.lineWidth = r * 0.12;
+      ctx.beginPath(); ctx.moveTo(-r * 0.46, -r * 0.34); ctx.lineTo(-r * 0.16, -r * 0.4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(r * 0.16, -r * 0.4); ctx.lineTo(r * 0.46, -r * 0.34); ctx.stroke();
+    } else if (ch.id === 'knight') { // bucket helm with a visor slit
+      ctx.fillStyle = 'rgba(158,168,190,0.95)';
+      ctx.fillRect(-r * 0.68, -r * 0.72, r * 1.36, r * 0.62);
+      ctx.fillStyle = ink;
+      ctx.fillRect(-r * 0.45, -r * 0.42, r * 0.9, r * 0.12);
+      ctx.strokeStyle = ink; ctx.lineWidth = r * 0.07;
+      ctx.strokeRect(-r * 0.68, -r * 0.72, r * 1.36, r * 0.62);
+      ctx.beginPath();
+      ctx.arc(0, r * 0.34, r * 0.2, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
+    }
   }
 
   // Coral grins, Amber dozes, Sky is startled, Mint is serene, Lilac doubts
